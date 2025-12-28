@@ -1,4 +1,17 @@
 import os
+
+# Ensure Flask-SocketIO uses an async worker (eventlet) when available.
+# Without this, the stack can fall back to the threading/simple-websocket driver,
+# which tends to block Gunicorn sync workers and trigger timeouts on Render.
+SOCKETIO_ASYNC_MODE = os.getenv("SOCKETIO_ASYNC_MODE", "eventlet")
+if SOCKETIO_ASYNC_MODE == "eventlet":
+    try:
+        import eventlet  # type: ignore
+
+        eventlet.monkey_patch()
+    except Exception:
+        # If eventlet isn't available, Flask-SocketIO will fall back to another mode.
+        SOCKETIO_ASYNC_MODE = "threading"
 import json
 from datetime import datetime, timedelta, timezone # Import UTC for timezone-aware datetimes
 import pytz
@@ -55,7 +68,7 @@ def _require_admin_page():
 
 # Initialize SocketIO
 # cors_allowed_origins="*" allows connections from any origin. Adjust for production security.
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=SOCKETIO_ASYNC_MODE)
 
 # MongoDB Configuration
 # These are loaded from environment variables. Provide sensible defaults for local development.
