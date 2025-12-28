@@ -3,7 +3,7 @@ from werkzeug.security import generate_password_hash
 from datetime import datetime
 import os # Import os for potential environment variables, though not used in MONGO_URI directly here
 
-MONGO_URI = os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://gowthamst31:gowtham123@powerloom-cluster.gfl74dq.mongodb.net/?retryWrites=true&w=majority&appName=powerloom-cluster")
 
 
 if not MONGO_URI:
