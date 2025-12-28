@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# Secrets / env files
+.env
+.env.*
+.flask_secret_key
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Flutter build artifacts (repo root only)
+.powerloom_mobile_build/

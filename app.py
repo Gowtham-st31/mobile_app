@@ -27,7 +27,7 @@ import requests
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://gowthamst31:gowtham123@powerloom-cluster.gfl74dq.mongodb.net/?retryWrites=true&w=majority&appName=powerloom-cluster")
+MONGO_URI = os.getenv("MONGO_URI")
 
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI is not set")
@@ -1333,7 +1333,9 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
         app.logger.debug(f"Sending prompt to AI:\n{prompt_text[:999999999999999]}...") # Log first 500 chars
 
         # Call Gemini API
-        api_key = "AIzaSyDgPfaR6sjs4L2I34n5NVnyhZvYcFPxohY" 
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return jsonify({'status': 'error', 'message': 'GEMINI_API_KEY is not set on the server.'}), 500
         api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
         
         headers = {
@@ -1437,14 +1439,19 @@ def ask_ai_question(client, db, loom_collection, users_collection, warp_data_col
         app.logger.debug(f"Sending follow-up prompt to AI:\n{follow_up_prompt_text[:500]}...")
 
         # Call Gemini API
-        api_key = "AIzaSyDABptEJ0hUgQMNHep7cAaLKADJXP8AL0w" 
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return jsonify({'status': 'error', 'message': 'GEMINI_API_KEY is not set on the server.'}), 500
+        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
         
         payload = {
             "contents": [{"role": "user", "parts": [{"text": follow_up_prompt_text}]}]
         }
 
-        headers = {'Content-Type': 'application/json'}
+        headers = {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': api_key,
+        }
         response = requests.post(api_url, headers=headers, json=payload)
         response.raise_for_status() 
         
@@ -1482,8 +1489,10 @@ def suggest_loomer_name():
     prompt_text = "Suggest a single, common, and appropriate name for a person who operates a powerloom machine. The name should be short and suitable for a username."
 
     try:
-        api_key = "AIzaSyDABptEJ0hUgQMNHep7cAaLKADJXP8AL0w" 
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return jsonify({'status': 'error', 'message': 'GEMINI_API_KEY is not set on the server.'}), 500
+        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
         
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
@@ -1492,7 +1501,10 @@ def suggest_loomer_name():
             }
         }
 
-        headers = {'Content-Type': 'application/json'}
+        headers = {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': api_key,
+        }
         response = requests.post(api_url, headers=headers, json=payload)
         response.raise_for_status() 
         
