@@ -43,4 +43,3 @@ xhtml2pdf==0.2.17
 Flask-SocketIO==5.3.0
 eventlet==0.40.4
 weasyprint
-eventlet
