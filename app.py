@@ -1,16 +1,25 @@
 import os
+import sys
 
 # Ensure Flask-SocketIO uses an async worker (eventlet) when available.
 # Without this, the stack can fall back to the threading/simple-websocket driver,
 # which tends to block Gunicorn sync workers and trigger timeouts on Render.
 SOCKETIO_ASYNC_MODE = os.getenv("SOCKETIO_ASYNC_MODE", "eventlet")
+
+# Eventlet has had compatibility issues with newer Python releases.
+# On Python 3.13+ we default to threading unless the operator explicitly forces eventlet.
+_py = sys.version_info
+_eventlet_forced = os.getenv("FORCE_EVENTLET", "").strip().lower() in {"1", "true", "yes"}
+if SOCKETIO_ASYNC_MODE == "eventlet" and (_py.major, _py.minor) >= (3, 13) and not _eventlet_forced:
+    SOCKETIO_ASYNC_MODE = "threading"
+
 if SOCKETIO_ASYNC_MODE == "eventlet":
     try:
         import eventlet  # type: ignore
 
         eventlet.monkey_patch()
     except Exception:
-        # If eventlet isn't available, Flask-SocketIO will fall back to another mode.
+        # If eventlet isn't available or patching fails, fall back.
         SOCKETIO_ASYNC_MODE = "threading"
 import json
 from datetime import datetime, timedelta, timezone # Import UTC for timezone-aware datetimes
@@ -41,9 +50,6 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 
 MONGO_URI = os.getenv("MONGO_URI")
-
-if not MONGO_URI:
-    raise RuntimeError("MONGO_URI is not set")
 
 app = Flask(__name__)
 
