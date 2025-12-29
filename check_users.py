@@ -1,13 +1,22 @@
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash
 from datetime import datetime
-import os # Import os for potential environment variables, though not used in MONGO_URI directly here
+import os
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://gowthamst31:gowtham123@powerloom-cluster.gfl74dq.mongodb.net/?retryWrites=true&w=majority&appName=powerloom-cluster")
+# Optional local dev support: load environment variables from a .env file.
+try:
+    from dotenv import load_dotenv  # type: ignore
 
+    load_dotenv()
+except Exception:
+    pass
 
+# IMPORTANT: Do not hard-code database credentials in source code.
+# Provide MONGO_URI via environment variables (or a local .env file).
+MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
-    raise RuntimeError("MONGO_URI is not set")
+    # Safe local default for development (requires a local MongoDB instance).
+    MONGO_URI = "mongodb://localhost:27017"
 
 DB_NAME = "powerloom"
 USERS_COLLECTION = "users" # This is the collection where user data is stored

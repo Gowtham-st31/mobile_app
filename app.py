@@ -1,6 +1,15 @@
 import os
 import sys
 
+# Optional local dev support: load environment variables from a .env file.
+# In production, prefer real environment variables (Render/Heroku/etc.).
+try:
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    pass
+
 # Ensure Flask-SocketIO uses an async worker (eventlet) when available.
 # Without this, the stack can fall back to the threading/simple-websocket driver,
 # which tends to block Gunicorn sync workers and trigger timeouts on Render.
@@ -51,6 +60,17 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 
 MONGO_URI = os.getenv("MONGO_URI")
+
+# For local development, allow a default localhost MongoDB URI so the app can
+# run without extra configuration. In production-like environments, require
+# MONGO_URI to be explicitly set.
+_is_prod_like = (
+    os.getenv("FLASK_ENV", "").strip().lower() == "production"
+    or bool(os.getenv("RENDER"))
+    or bool(os.getenv("DYNO"))
+)
+if not MONGO_URI and not _is_prod_like:
+    MONGO_URI = "mongodb://localhost:27017"
 
 
 def _redact_mongo_uri(uri: str) -> str:
@@ -210,7 +230,8 @@ def handle_db_errors(f):
                 app.logger.critical("Failed to get database connection in decorator. Returning 503.")
                 return jsonify({
                     'status': 'error',
-                    'message': 'Database connection failed. Please try again later.'
+                    'message': 'Database connection failed. Please try again later.',
+                    'hint': 'Set MONGO_URI (or start MongoDB on localhost:27017 for local development).'
                 }), 503
             
             return f(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection, *args, **kwargs)
