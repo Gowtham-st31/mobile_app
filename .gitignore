@@ -29,3 +29,6 @@ Thumbs.db
 
 # Flutter build artifacts (repo root only)
 .powerloom_mobile_build/
+
+# Hosted Android APKs (do not commit binaries)
+static/apk/*.apk

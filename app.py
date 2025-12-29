@@ -33,7 +33,8 @@ if SOCKETIO_ASYNC_MODE == "eventlet":
 import json
 from datetime import datetime, timedelta, timezone # Import UTC for timezone-aware datetimes
 import pytz
-from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+import os.path
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session, send_from_directory
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -121,11 +122,17 @@ def _normalize_mongo_uri(uri: str) -> str:
 app = Flask(__name__)
 
 # IMPORTANT FOR DEPLOYMENT:
-# 1. For production, set FLASK_SECRET_KEY as an environment variable in your deployment environment.
-#    Example on Linux/macOS: export FLASK_SECRET_KEY='your_very_long_random_string_here_in_production'\
-#    Example for Heroku/Render: Set it in Config Vars
-# 2. For local development, os.urandom(24) generates a good random key.
-app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))
+# - In production-like environments (Render/Heroku), FLASK_SECRET_KEY must be set.
+# - In local development, use a stable default so session cookies remain valid even
+#   if the server runs with multiple workers/processes.
+_flask_secret_key = os.getenv("FLASK_SECRET_KEY")
+if not _flask_secret_key:
+    if _is_prod_like:
+        raise RuntimeError("FLASK_SECRET_KEY is required in production. Set it in Render/Heroku environment variables.")
+    _flask_secret_key = "dev-secret-key-change-me"
+    app.logger.warning("FLASK_SECRET_KEY not set; using an insecure development default.")
+
+app.secret_key = _flask_secret_key
 
 
 def _require_login_page():
@@ -142,6 +149,75 @@ def _require_admin_page():
 # Initialize SocketIO
 # cors_allowed_origins="*" allows connections from any origin. Adjust for production security.
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=SOCKETIO_ASYNC_MODE)
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return default
+
+
+@app.get("/api/mobile/android/latest")
+def api_mobile_android_latest():
+    """Public endpoint for Android apps to check for updates.
+
+    Configure via environment variables:
+    - MOBILE_ANDROID_VERSION_CODE (int)
+    - MOBILE_ANDROID_VERSION_NAME (string)
+    - MOBILE_ANDROID_APK_URL (optional absolute URL)
+    - MOBILE_ANDROID_APK_FILENAME (optional, default powerloom_mobile.apk)
+    """
+
+    version_code = _int_env("MOBILE_ANDROID_VERSION_CODE", 1)
+    version_name = os.getenv("MOBILE_ANDROID_VERSION_NAME", "1.0.0").strip() or "1.0.0"
+
+    apk_url = (os.getenv("MOBILE_ANDROID_APK_URL") or "").strip()
+    if not apk_url:
+        # Fallback to our own download route.
+        apk_url = request.url_root.rstrip("/") + url_for("download_android_apk")
+
+    return jsonify(
+        {
+            "platform": "android",
+            "version_code": version_code,
+            "version_name": version_name,
+            "apk_url": apk_url,
+        }
+    )
+
+
+@app.get("/download/android")
+def download_android_apk():
+    """Serve the latest Android APK from static/apk.
+
+    Put your APK at: static/apk/<filename>
+    Optionally configure filename via MOBILE_ANDROID_APK_FILENAME.
+    """
+
+    filename = (os.getenv("MOBILE_ANDROID_APK_FILENAME") or "powerloom_mobile.apk").strip() or "powerloom_mobile.apk"
+    directory = os.path.join(app.root_path, "static", "apk")
+
+    file_path = os.path.join(directory, filename)
+    if not os.path.isfile(file_path):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "APK not found on server.",
+                "expected_path": f"static/apk/{filename}",
+                "hint": "Upload the latest APK to static/apk or set MOBILE_ANDROID_APK_URL to an external download link.",
+            }
+        ), 404
+
+    return send_from_directory(
+        directory,
+        filename,
+        as_attachment=True,
+        mimetype="application/vnd.android.package-archive",
+    )
 
 # MongoDB Configuration
 # These are loaded from environment variables. Provide sensible defaults for local development.
@@ -231,7 +307,7 @@ def handle_db_errors(f):
                 return jsonify({
                     'status': 'error',
                     'message': 'Database connection failed. Please try again later.',
-                    'hint': 'Set MONGO_URI (or start MongoDB on localhost:27017 for local development).'
+                    'hint': 'Set MONGO_URI in the environment (Render: Environment tab). For local dev, start MongoDB on localhost:27017. For Atlas, ensure Network Access allows your server IP.'
                 }), 503
             
             return f(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection, *args, **kwargs)
