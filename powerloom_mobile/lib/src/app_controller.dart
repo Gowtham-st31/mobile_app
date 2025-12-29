@@ -33,7 +33,29 @@ class AppController extends ChangeNotifier {
 
   String _baseUrl;
 
-  AppController({required String defaultBaseUrl}) : _baseUrl = defaultBaseUrl;
+  AppController({required String defaultBaseUrl}) : _baseUrl = _normalizeBaseUrl(defaultBaseUrl) ?? defaultBaseUrl;
+
+  static String? _normalizeBaseUrl(String? raw) {
+    if (raw == null) return null;
+    var value = raw.trim();
+    if (value.isEmpty) return null;
+
+    // Remove trailing slashes to keep URL joins consistent.
+    value = value.replaceAll(RegExp(r'/+$'), '');
+
+    final lower = value.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      return value;
+    }
+
+    // If user entered a bare host (common on phones), add a scheme.
+    // Prefer http for local dev hosts; otherwise default to https.
+    final isLocalHost = lower.startsWith('localhost') || lower.startsWith('127.') || lower.startsWith('10.0.2.2');
+    final isLanIp = RegExp(r'^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?$').hasMatch(value);
+
+    final scheme = (isLocalHost || isLanIp) ? 'http://' : 'https://';
+    return '$scheme$value';
+  }
 
   bool get bootstrapping => _bootstrapping;
   ApiClient get api {
@@ -63,7 +85,17 @@ class AppController extends ChangeNotifier {
   Future<void> init() async {
     final start = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
-    _baseUrl = prefs.getString(_prefsBaseUrlKey) ?? _baseUrl;
+
+    final stored = prefs.getString(_prefsBaseUrlKey);
+    final normalizedStored = _normalizeBaseUrl(stored);
+    if (normalizedStored != null) {
+      _baseUrl = normalizedStored;
+      if (stored != normalizedStored) {
+        await prefs.setString(_prefsBaseUrlKey, normalizedStored);
+      }
+    } else {
+      _baseUrl = _normalizeBaseUrl(_baseUrl) ?? _baseUrl;
+    }
 
     await _initApi();
 
@@ -95,10 +127,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> setBaseUrl(String value) async {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return;
+    final normalized = _normalizeBaseUrl(value);
+    if (normalized == null) return;
 
-    _baseUrl = trimmed;
+    _baseUrl = normalized;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefsBaseUrlKey, _baseUrl);
 
