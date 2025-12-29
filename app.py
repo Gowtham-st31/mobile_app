@@ -349,25 +349,50 @@ def admin_required(f):
 
 @app.route('/messages', methods=['GET'])
 @login_required
-def get_messages():
-    """Compatibility endpoint. Messages are not persisted; returns empty list."""
-    return jsonify({'status': 'success', 'messages': []}), 200
+@handle_db_errors
+def get_messages(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
+    """Return recent admin announcements.
+
+    Mobile clients poll this endpoint; we persist admin broadcasts so polling works
+    even if Socket.IO is unavailable.
+    """
+    messages_collection = db[MESSAGES_COLLECTION]
+    cursor = messages_collection.find({}, {'message': 1, 'sender': 1, 'created_at': 1}).sort('_id', -1).limit(50)
+    messages = []
+    for doc in cursor:
+        messages.append({
+            '_id': str(doc.get('_id', '')),
+            'message': doc.get('message', ''),
+            'sender': doc.get('sender', ''),
+            'created_at': doc.get('created_at', ''),
+        })
+
+    return jsonify({'status': 'success', 'messages': messages}), 200
 
 
 @app.route('/admin/broadcast_message', methods=['POST'])
 @login_required
 @admin_required
-def broadcast_message():
-    """Admin-only: broadcast a message to all connected users via Socket.IO (no persistence)."""
+@handle_db_errors
+def broadcast_message(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
+    """Admin-only: broadcast a message to all connected users via Socket.IO and persist it."""
     data = request.get_json(silent=True) or {}
     message = (data.get('message') or '').strip()
     if not message:
         return jsonify({'status': 'error', 'message': 'Message is required.'}), 400
 
-    created_at = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
+    created_at = datetime.now(timezone.utc).isoformat()
     sender = session.get('username') or 'admin'
 
+    messages_collection = db[MESSAGES_COLLECTION]
+    insert_result = messages_collection.insert_one({
+        'message': message,
+        'sender': sender,
+        'created_at': created_at,
+    })
+
     payload = {
+        '_id': str(insert_result.inserted_id),
         'message': message,
         'sender': sender,
         'created_at': created_at,
