@@ -25,6 +25,7 @@ import json
 from datetime import datetime, timedelta, timezone # Import UTC for timezone-aware datetimes
 import pytz
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
@@ -50,6 +51,52 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 
 MONGO_URI = os.getenv("MONGO_URI")
+
+
+def _redact_mongo_uri(uri: str) -> str:
+    try:
+        parts = urlsplit(uri)
+        netloc = parts.netloc
+        if "@" in netloc:
+            _, hostinfo = netloc.rsplit("@", 1)
+            netloc = f"<redacted>@{hostinfo}"
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        return "<unavailable>"
+
+
+def _normalize_mongo_uri(uri: str) -> str:
+    """Best-effort RFC3986 encoding for username/password in MongoDB URIs.
+
+    Fixes common failures like:
+    - ValueError: Port contains non-digit characters
+    caused by unescaped '@' or ':' in the password.
+    """
+    if not uri:
+        return uri
+
+    try:
+        parts = urlsplit(uri)
+    except Exception:
+        return uri
+
+    netloc = parts.netloc
+    if "@" not in netloc:
+        return uri
+
+    userinfo, hostinfo = netloc.rsplit("@", 1)
+    if ":" not in userinfo:
+        username_raw = userinfo
+        password_raw = ""
+    else:
+        username_raw, password_raw = userinfo.split(":", 1)
+
+    username_enc = quote(unquote(username_raw), safe="")
+    password_enc = quote(unquote(password_raw), safe="")
+    new_userinfo = username_enc if password_raw == "" and ":" not in userinfo else f"{username_enc}:{password_enc}"
+
+    new_netloc = f"{new_userinfo}@{hostinfo}"
+    return urlunsplit((parts.scheme, new_netloc, parts.path, parts.query, parts.fragment))
 
 app = Flask(__name__)
 
@@ -106,12 +153,14 @@ def get_db_connection():
         if not MONGO_URI:
             raise RuntimeError("MONGO_URI is not set")
 
+        normalized_uri = _normalize_mongo_uri(MONGO_URI)
         app.logger.debug(
-            f"Attempting MongoDB connection (first 30 chars): {MONGO_URI[:30]}..."
+            "Attempting MongoDB connection: %s",
+            _redact_mongo_uri(normalized_uri),
         )
 
         client = MongoClient(
-            MONGO_URI,
+            normalized_uri,
             serverSelectionTimeoutMS=5000,   # 5 sec timeout
             connectTimeoutMS=5000
         )
