@@ -242,7 +242,7 @@ class _AdminScreenState extends State<AdminScreen> {
                   controller: _serverUrlController,
                   decoration: const InputDecoration(
                     labelText: 'Base URL',
-                    hintText: 'http://127.0.0.1:8080',
+                    hintText: 'https://vinayagatexapp.onrender.com',
                   ),
                   keyboardType: TextInputType.url,
                   textInputAction: TextInputAction.done,

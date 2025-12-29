@@ -85,7 +85,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       controller: _baseUrlController,
                       decoration: const InputDecoration(
                         labelText: 'Server URL',
-                        hintText: 'http://127.0.0.1:8080',
+                        hintText: 'https://vinayagatexapp.onrender.com',
                         prefixIcon: Icon(Icons.link),
                       ),
                       keyboardType: TextInputType.url,
@@ -138,7 +138,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     const SizedBox(height: 8),
                     Text(
-                      'Tip: Android emulator should use http://10.0.2.2:8080',
+                      'Tip: Android emulator should use http://10.0.2.2:8080 (local dev)',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),

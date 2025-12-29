@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'src/app_controller.dart';
@@ -8,9 +9,13 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Default base URL:
-  // - Windows/macOS/Linux desktop: http://127.0.0.1:8080
-  // - Android emulator: http://10.0.2.2:8080
-  const defaultBaseUrl = String.fromEnvironment('POWERLOOM_API_BASE_URL', defaultValue: 'http://127.0.0.1:8080');
+  // - Release builds: Render deployment (HTTPS)
+  // - Debug/dev builds: local server (HTTP)
+  // Override at build time with: --dart-define=POWERLOOM_API_BASE_URL=<url>
+  const envBaseUrl = String.fromEnvironment('POWERLOOM_API_BASE_URL', defaultValue: '');
+  final defaultBaseUrl = envBaseUrl.isNotEmpty
+      ? envBaseUrl
+      : (kReleaseMode ? 'https://vinayagatexapp.onrender.com' : 'http://127.0.0.1:8080');
 
   final controller = AppController(defaultBaseUrl: defaultBaseUrl);
   runApp(PowerloomApp(controller: controller));
