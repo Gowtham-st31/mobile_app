@@ -180,6 +180,17 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _invalidateSession() {
+    _realtime.disconnect();
+    _messagePoller?.cancel();
+    _messagePoller = null;
+    _lastSeenAnnouncementId = null;
+    _session = null;
+    _profile = null;
+    _storedAdminMessages = const [];
+    notifyListeners();
+  }
+
   bool get isAdmin => (_session?.role.toLowerCase() ?? '') == 'admin';
 
   Future<List<Announcement>> loadAnnouncements() => api.getAnnouncements();
@@ -251,16 +262,51 @@ class AppController extends ChangeNotifier {
         final list = await api.getAnnouncements();
         if (list.isEmpty) return;
 
+        // API returns newest-first.
         final newest = list.first;
+
+        // First load: persist current server messages to local storage so they
+        // are visible in the Messages screen, but don't show a banner.
         if (_lastSeenAnnouncementId == null) {
-          // First load: don't spam a banner.
           _lastSeenAnnouncementId = newest.id;
+          for (final a in list.reversed) {
+            unawaited(
+              storeIncomingAdminPayload({
+                '_id': a.id,
+                'message': a.message,
+                'sender': a.sender,
+                'created_at': a.createdAt,
+              }),
+            );
+          }
           return;
         }
 
         if (newest.id == _lastSeenAnnouncementId) return;
-        _lastSeenAnnouncementId = newest.id;
 
+        // Persist all new messages since the last seen id (best-effort).
+        final lastSeen = _lastSeenAnnouncementId;
+        int stopIndex = -1;
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].id == lastSeen) {
+            stopIndex = i;
+            break;
+          }
+        }
+
+        final newMessages = (stopIndex == -1) ? list : list.sublist(0, stopIndex);
+        for (final a in newMessages.reversed) {
+          unawaited(
+            storeIncomingAdminPayload({
+              '_id': a.id,
+              'message': a.message,
+              'sender': a.sender,
+              'created_at': a.createdAt,
+            }),
+          );
+        }
+
+        _lastSeenAnnouncementId = newest.id;
         _lastAdminMessage = {
           '_id': newest.id,
           'message': newest.message,
@@ -271,10 +317,12 @@ class AppController extends ChangeNotifier {
         if (!silent) {
           _notifications.showAdminMessage(title: 'Admin message', body: newest.message);
         }
-
-        // Persist locally on device.
-        unawaited(storeIncomingAdminPayload(_lastAdminMessage!));
         notifyListeners();
+      } on ApiException catch (e) {
+        if (e.statusCode == 401 || e.statusCode == 403) {
+          _invalidateSession();
+          return;
+        }
       } catch (_) {
         // Ignore polling errors; UI can still manually refresh.
       }
