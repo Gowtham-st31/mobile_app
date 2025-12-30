@@ -60,6 +60,10 @@ class AppController extends ChangeNotifier {
       value = 'http://${value.substring(6)}';
     }
 
+    // Fix a common domain typo (Render): onrender.cc -> onrender.com
+    // This is safe because we only rewrite the host suffix.
+    value = value.replaceAll(RegExp(r'onrender\.cc\b', caseSensitive: false), 'onrender.com');
+
     // Remove trailing slashes to keep URL joins consistent.
     value = value.replaceAll(RegExp(r'/+$'), '');
 
