@@ -79,6 +79,27 @@ class ApiClient {
     // Only use this when there is no response body to extract.
     if (e.response != null) return null;
 
+    String? describeDetails() {
+      final error = e.error;
+      if (error is SocketException) {
+        final os = error.osError?.message;
+        final host = error.address?.host;
+        final port = error.port;
+        final target = [if (host != null && host.trim().isNotEmpty) host, if (port != 0) port.toString()].join(':');
+        final parts = <String>[
+          error.message.trim().isNotEmpty ? error.message.trim() : 'Socket error',
+          if (os != null && os.trim().isNotEmpty) os.trim(),
+          if (target.trim().isNotEmpty) 'target=$target',
+        ];
+        return parts.join(' | ');
+      }
+
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) return msg;
+      if (error != null) return error.toString();
+      return null;
+    }
+
     switch (e.type) {
       case DioExceptionType.connectionTimeout:
         return 'Connection timed out. The server may be starting up or unreachable.';
@@ -87,9 +108,9 @@ class ApiClient {
       case DioExceptionType.receiveTimeout:
         return 'Server took too long to respond.';
       case DioExceptionType.badCertificate:
-        return 'Secure connection failed (bad certificate). Check the server URL and HTTPS setup.';
+        return 'Secure connection failed (bad certificate). ${describeDetails() ?? 'Check the server URL and HTTPS setup.'}';
       case DioExceptionType.connectionError:
-        return 'Network error. Check your internet connection and server URL.';
+        return 'Network error. ${describeDetails() ?? 'Check your internet connection and server URL.'}';
       case DioExceptionType.cancel:
         return 'Request was cancelled.';
       case DioExceptionType.badResponse:
@@ -97,9 +118,9 @@ class ApiClient {
         return null;
       case DioExceptionType.unknown:
         // Try to surface something helpful without being noisy.
-        final msg = (e.message ?? '').trim();
-        if (msg.isEmpty) return 'Network error. Check your internet connection and server URL.';
-        return 'Network error: $msg';
+        final details = describeDetails();
+        if (details == null || details.trim().isEmpty) return 'Network error. Check your internet connection and server URL.';
+        return 'Network error: $details';
     }
   }
 
