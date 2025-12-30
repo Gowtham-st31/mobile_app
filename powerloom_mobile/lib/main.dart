@@ -1,9 +1,13 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:dio/dio.dart';
+
 import 'src/app_controller.dart';
 import 'src/screens/home_shell.dart';
 import 'src/screens/login_screen.dart';
+import 'src/screens/update_required_screen.dart';
+import 'src/services/app_update_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,10 +35,44 @@ class PowerloomApp extends StatefulWidget {
 }
 
 class _PowerloomAppState extends State<PowerloomApp> {
+  bool _startupComplete = false;
+  AppVersionInfo? _updateRequired;
+
   @override
   void initState() {
     super.initState();
-    widget.controller.init();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    // 1) Run existing bootstrap (baseUrl restore, cookies/session restore, etc)
+    await widget.controller.init();
+
+    // 2) Forced update gate (silent failure on any error)
+    await _checkForForcedUpdate();
+
+    if (!mounted) return;
+    setState(() {
+      _startupComplete = true;
+    });
+  }
+
+  Future<void> _checkForForcedUpdate() async {
+    try {
+      final service = AppUpdateService(dio: Dio());
+      final latest = await service.fetchLatestAppVersion(baseUrl: widget.controller.baseUrl);
+      if (latest == null) return;
+
+      final currentCode = await service.getCurrentAndroidVersionCode();
+      if (latest.versionCode > currentCode) {
+        if (!mounted) return;
+        setState(() {
+          _updateRequired = latest;
+        });
+      }
+    } catch (_) {
+      // Silent failure: treat as no forced update.
+    }
   }
 
   @override
@@ -122,15 +160,24 @@ class _PowerloomAppState extends State<PowerloomApp> {
 
         final session = widget.controller.session;
 
+        final update = _updateRequired;
+        final isUpdateRequired = update != null;
+
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: 'Powerloom DMS',
           theme: theme,
-          home: widget.controller.bootstrapping
-              ? const _Splash()
-              : (session == null
-                  ? LoginScreen(controller: widget.controller)
-                  : HomeShell(controller: widget.controller, session: session)),
+          home: isUpdateRequired
+              ? UpdateRequiredScreen(
+                  latestVersion: update.latestVersion,
+                  latestVersionCode: update.versionCode,
+                  apkUrl: update.apkUrl,
+                )
+              : (!_startupComplete || widget.controller.bootstrapping)
+                  ? const _Splash()
+                  : (session == null
+                      ? LoginScreen(controller: widget.controller)
+                      : HomeShell(controller: widget.controller, session: session)),
         );
       },
     );

@@ -190,6 +190,47 @@ def api_mobile_android_latest():
     )
 
 
+@app.get("/api/app-version")
+def api_app_version():
+    """Public endpoint for mobile apps to check for forced updates.
+
+    Response contract:
+      {
+        "latest_version": "1.0.2",
+        "version_code": 3,
+        "apk_url": "https://.../app-release.apk"
+      }
+
+    Configure via environment variables (recommended on Render):
+    - MOBILE_APP_VERSION_CODE (int)
+    - MOBILE_APP_LATEST_VERSION (string)
+    - MOBILE_APP_APK_URL (string)
+
+    Back-compat fallbacks:
+    - MOBILE_ANDROID_VERSION_CODE / MOBILE_ANDROID_VERSION_NAME / MOBILE_ANDROID_APK_URL
+    - /download/android (if APK URL is not provided)
+    """
+
+    version_code = _int_env("MOBILE_APP_VERSION_CODE", _int_env("MOBILE_ANDROID_VERSION_CODE", 1))
+    latest_version = (
+        os.getenv("MOBILE_APP_LATEST_VERSION")
+        or os.getenv("MOBILE_ANDROID_VERSION_NAME")
+        or "1.0.0"
+    ).strip() or "1.0.0"
+
+    apk_url = (os.getenv("MOBILE_APP_APK_URL") or os.getenv("MOBILE_ANDROID_APK_URL") or "").strip()
+    if not apk_url:
+        apk_url = request.url_root.rstrip("/") + url_for("download_android_apk")
+
+    return jsonify(
+        {
+            "latest_version": latest_version,
+            "version_code": version_code,
+            "apk_url": apk_url,
+        }
+    )
+
+
 @app.get("/download/android")
 def download_android_apk():
     """Serve the latest Android APK from static/apk.
