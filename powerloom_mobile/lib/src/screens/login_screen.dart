@@ -93,9 +93,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       validator: (v) {
                         final value = (v ?? '').trim();
                         if (value.isEmpty) return 'Server URL is required';
-                        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-                          return 'URL must start with http:// or https://';
-                        }
+                        final normalized = widget.controller.normalizeBaseUrl(value);
+                        if (normalized == null) return 'Enter a valid URL (example: https://vinayagatexapp.onrender.com)';
                         return null;
                       },
                     ),

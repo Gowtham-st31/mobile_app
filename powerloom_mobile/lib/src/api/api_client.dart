@@ -70,8 +70,36 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Login failed').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Login failed';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Login failed';
       throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
+  String? _friendlyNetworkMessage(DioException e) {
+    // Only use this when there is no response body to extract.
+    if (e.response != null) return null;
+
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+        return 'Connection timed out. The server may be starting up or unreachable.';
+      case DioExceptionType.sendTimeout:
+        return 'Request timed out while sending data.';
+      case DioExceptionType.receiveTimeout:
+        return 'Server took too long to respond.';
+      case DioExceptionType.badCertificate:
+        return 'Secure connection failed (bad certificate). Check the server URL and HTTPS setup.';
+      case DioExceptionType.connectionError:
+        return 'Network error. Check your internet connection and server URL.';
+      case DioExceptionType.cancel:
+        return 'Request was cancelled.';
+      case DioExceptionType.badResponse:
+        // Should have e.response; fall through.
+        return null;
+      case DioExceptionType.unknown:
+        // Try to surface something helpful without being noisy.
+        final msg = (e.message ?? '').trim();
+        if (msg.isEmpty) return 'Network error. Check your internet connection and server URL.';
+        return 'Network error: $msg';
     }
   }
 

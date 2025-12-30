@@ -35,16 +35,40 @@ class AppController extends ChangeNotifier {
 
   AppController({required String defaultBaseUrl}) : _baseUrl = _normalizeBaseUrl(defaultBaseUrl) ?? defaultBaseUrl;
 
+  /// Normalizes and validates a base URL for API calls.
+  ///
+  /// - Trims whitespace
+  /// - Removes trailing slashes
+  /// - Adds a scheme if missing (http for local dev, https otherwise)
+  /// - Fixes a few common mobile typos like `ps://` -> `https://`
+  /// - Ensures the result parses as a valid http(s) URI with a host
+  String? normalizeBaseUrl(String? raw) => _normalizeBaseUrl(raw);
+
   static String? _normalizeBaseUrl(String? raw) {
     if (raw == null) return null;
     var value = raw.trim();
     if (value.isEmpty) return null;
 
+    // Fix common missing-leading-character typos.
+    // Example: users sometimes paste `ps://example.com` instead of `https://example.com`.
+    final lowerRaw = value.toLowerCase();
+    if (lowerRaw.startsWith('ps://')) {
+      value = 'https://${value.substring(5)}';
+    } else if (lowerRaw.startsWith('ttps://')) {
+      value = 'https://${value.substring(7)}';
+    } else if (lowerRaw.startsWith('ttp://')) {
+      value = 'http://${value.substring(6)}';
+    }
+
     // Remove trailing slashes to keep URL joins consistent.
     value = value.replaceAll(RegExp(r'/+$'), '');
 
     final lower = value.toLowerCase();
-    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+    // If it already has a scheme, only allow http(s).
+    if (lower.contains('://')) {
+      if (!(lower.startsWith('http://') || lower.startsWith('https://'))) return null;
+      final uri = Uri.tryParse(value);
+      if (uri == null || uri.host.trim().isEmpty) return null;
       return value;
     }
 
@@ -54,7 +78,11 @@ class AppController extends ChangeNotifier {
     final isLanIp = RegExp(r'^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?$').hasMatch(value);
 
     final scheme = (isLocalHost || isLanIp) ? 'http://' : 'https://';
-    return '$scheme$value';
+
+    final normalized = '$scheme$value';
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || uri.host.trim().isEmpty) return null;
+    return normalized;
   }
 
   bool get bootstrapping => _bootstrapping;
@@ -128,7 +156,9 @@ class AppController extends ChangeNotifier {
 
   Future<void> setBaseUrl(String value) async {
     final normalized = _normalizeBaseUrl(value);
-    if (normalized == null) return;
+    if (normalized == null) {
+      throw ArgumentError('Invalid server URL');
+    }
 
     _baseUrl = normalized;
     final prefs = await SharedPreferences.getInstance();
