@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../app_controller.dart';
 
@@ -16,6 +17,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _baseUrlController = TextEditingController();
+
+  late final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
   bool _submitting = false;
 
@@ -36,9 +39,16 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
+    final normalized = widget.controller.normalizeBaseUrl(_baseUrlController.text);
+    if (normalized == null) return;
+    if (_baseUrlController.text.trim() != normalized) {
+      // Make the effective URL visible to the user (e.g. auto-fix .cc -> .com).
+      _baseUrlController.text = normalized;
+    }
+
     setState(() => _submitting = true);
     try {
-      await widget.controller.setBaseUrl(_baseUrlController.text);
+      await widget.controller.setBaseUrl(normalized);
       await widget.controller.login(
         username: _usernameController.text,
         password: _passwordController.text,
@@ -46,7 +56,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
+        SnackBar(content: Text('${e.toString()}\nServer: $normalized')),
       );
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -78,6 +88,19 @@ class _LoginScreenState extends State<LoginScreen> {
                       'Sign in to continue',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    FutureBuilder<PackageInfo>(
+                      future: _packageInfo,
+                      builder: (context, snap) {
+                        final info = snap.data;
+                        final label = info == null ? 'App version: …' : 'App version: ${info.version} (${info.buildNumber})';
+                        return Text(
+                          label,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        );
+                      },
                     ),
                     const SizedBox(height: 24),
 
