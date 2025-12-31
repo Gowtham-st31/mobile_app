@@ -174,18 +174,24 @@ class _AdminScreenState extends State<AdminScreen> {
             else
               ...messages.take(10).map(
                     (m) {
-                      final canDeleteSent = m.id.startsWith('local:');
+                      final canDeleteLocal = m.id.startsWith('local:');
+                      final canDeleteGlobal = !canDeleteLocal && m.id.trim().isNotEmpty;
                       return Card(
                         child: ListTile(
                           title: Text(m.message),
                           subtitle: Text('${m.sender}\n${_formatCreatedAt(m.createdAt)}'.trim()),
-                          trailing: canDeleteSent
+                          trailing: (canDeleteLocal || canDeleteGlobal)
                               ? IconButton(
-                                  tooltip: 'Delete sent message',
+                                  tooltip: canDeleteLocal ? 'Delete (this phone)' : 'Delete (all users)',
                                   icon: const Icon(Icons.delete_outline),
                                   onPressed: () async {
-                                    await widget.controller.deleteStoredAdminMessageById(m.id);
-                                    if (mounted) _toast('Message deleted');
+                                    if (canDeleteLocal) {
+                                      await widget.controller.deleteStoredAdminMessageById(m.id);
+                                      if (mounted) _toast('Message deleted (this phone)');
+                                      return;
+                                    }
+                                    await widget.controller.deleteAdminMessageGlobally(m.id);
+                                    if (mounted) _toast('Message deleted (all users)');
                                   },
                                 )
                               : null,

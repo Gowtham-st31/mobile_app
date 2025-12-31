@@ -455,6 +455,18 @@ class ApiClient {
     }
   }
 
+  Future<void> deleteAnnouncement({required String id}) async {
+    try {
+      final response = await _dio.delete('/admin/messages/$id');
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] == 'success') return;
+      throw ApiException((data['message'] ?? 'Failed to delete message').toString(), statusCode: response.statusCode);
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to delete message';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
   Future<void> addUser({
     required String username,
     required String password,

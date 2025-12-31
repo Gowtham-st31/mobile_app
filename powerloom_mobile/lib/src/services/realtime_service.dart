@@ -3,7 +3,11 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 class RealtimeService {
   io.Socket? _socket;
 
-  void connect({required String baseUrl, required void Function(Map<String, dynamic>) onAdminMessage}) {
+  void connect({
+    required String baseUrl,
+    required void Function(Map<String, dynamic>) onAdminMessage,
+    required void Function(Map<String, dynamic>) onAdminMessageDeleted,
+  }) {
     disconnect();
 
     // Flask-SocketIO default path is /socket.io
@@ -27,6 +31,17 @@ class RealtimeService {
 
       if (payload is Map) {
         onAdminMessage(payload.cast<String, dynamic>());
+      }
+    });
+
+    socket.on('admin_message_deleted', (data) {
+      dynamic payload = data;
+      if (payload is List && payload.isNotEmpty) {
+        payload = payload.first;
+      }
+
+      if (payload is Map) {
+        onAdminMessageDeleted(payload.cast<String, dynamic>());
       }
     });
 

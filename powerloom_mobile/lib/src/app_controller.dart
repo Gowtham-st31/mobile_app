@@ -105,6 +105,9 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? get lastAdminMessage => _lastAdminMessage;
   List<AdminMessage> get storedAdminMessages => _storedAdminMessages;
 
+  static final RegExp _serverIdPattern = RegExp(r'^[a-f0-9]{24}$', caseSensitive: false);
+  bool _isServerMessageId(String id) => _serverIdPattern.hasMatch(id);
+
   Future<void> deleteStoredAdminMessageById(String id) async {
     final username = _session?.username;
     if (username == null || username.trim().isEmpty) return;
@@ -112,6 +115,16 @@ class AppController extends ChangeNotifier {
     _storedAdminMessages = next;
     await _localMessages.save(username: username, messages: next);
     notifyListeners();
+  }
+
+  Future<void> deleteAdminMessageGlobally(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) return;
+    await api.deleteAnnouncement(id: trimmed);
+    await deleteStoredAdminMessageById(trimmed);
+    if (_lastSeenAnnouncementId == trimmed) {
+      _lastSeenAnnouncementId = null;
+    }
   }
 
   Future<void> init() async {
@@ -231,17 +244,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> sendAnnouncement(String message) async {
     await api.broadcastAnnouncement(message: message);
-
-    // Store on the admin device as well so Admin page can show history.
-    final sender = _session?.username.trim().isNotEmpty == true ? _session!.username : 'admin';
-    final now = DateTime.now().toIso8601String();
-    final local = AdminMessage(
-      id: 'local:${DateTime.now().microsecondsSinceEpoch}',
-      message: message,
-      sender: sender,
-      createdAt: now,
-    );
-    await _appendLocalMessage(local);
+    // History is stored server-side and will arrive via Socket.IO and/or polling.
   }
 
   Future<void> _loadLocalMessagesForCurrentUser() async {
@@ -296,6 +299,23 @@ class AppController extends ChangeNotifier {
         final list = await api.getAnnouncements();
         if (list.isEmpty) return;
 
+        // Reconcile deletions: if a server message is missing from the server list,
+        // remove it locally (covers clients that missed realtime delete).
+        final serverIds = list.map((a) => a.id).where((id) => id.trim().isNotEmpty).toSet();
+        final existing = _storedAdminMessages;
+        final pruned = existing.where((m) {
+          if (!_isServerMessageId(m.id)) return true;
+          return serverIds.contains(m.id);
+        }).toList(growable: false);
+        if (pruned.length != existing.length) {
+          _storedAdminMessages = pruned;
+          final username = _session?.username;
+          if (username != null && username.trim().isNotEmpty) {
+            await _localMessages.save(username: username, messages: pruned);
+          }
+          notifyListeners();
+        }
+
         // API returns newest-first.
         final newest = list.first;
 
@@ -328,7 +348,24 @@ class AppController extends ChangeNotifier {
           }
         }
 
-        final newMessages = (stopIndex == -1) ? list : list.sublist(0, stopIndex);
+        // If lastSeen isn't found, it likely got deleted or the server truncated the list.
+        // Do a silent resync to avoid spamming notifications.
+        if (stopIndex == -1) {
+          for (final a in list.reversed) {
+            unawaited(
+              storeIncomingAdminPayload({
+                '_id': a.id,
+                'message': a.message,
+                'sender': a.sender,
+                'created_at': a.createdAt,
+              }),
+            );
+          }
+          _lastSeenAnnouncementId = newest.id;
+          return;
+        }
+
+        final newMessages = list.sublist(0, stopIndex);
         for (final a in newMessages.reversed) {
           unawaited(
             storeIncomingAdminPayload({
@@ -380,6 +417,14 @@ class AppController extends ChangeNotifier {
         _notifications.showAdminMessage(title: 'Admin message', body: message);
         unawaited(storeIncomingAdminPayload(payload));
         notifyListeners();
+      },
+      onAdminMessageDeleted: (payload) {
+        final id = (payload['_id'] ?? payload['id'] ?? '').toString().trim();
+        if (id.isEmpty) return;
+        if (_lastSeenAnnouncementId == id) {
+          _lastSeenAnnouncementId = null;
+        }
+        unawaited(deleteStoredAdminMessageById(id));
       },
     );
   }

@@ -398,7 +398,7 @@ def get_messages(client, db, loom_collection, users_collection, warp_data_collec
     even if Socket.IO is unavailable.
     """
     messages_collection = db[MESSAGES_COLLECTION]
-    cursor = messages_collection.find({}, {'message': 1, 'sender': 1, 'created_at': 1}).sort('_id', -1).limit(50)
+    cursor = messages_collection.find({}, {'message': 1, 'sender': 1, 'created_at': 1}).sort('_id', -1).limit(200)
     messages = []
     for doc in cursor:
         messages.append({
@@ -445,6 +445,30 @@ def broadcast_message(client, db, loom_collection, users_collection, warp_data_c
     except Exception as e:
         app.logger.error(f"Failed to broadcast message: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Failed to send message.'}), 500
+
+
+@app.route('/admin/messages/<message_id>', methods=['DELETE'])
+@login_required
+@admin_required
+@handle_db_errors
+def delete_message(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection, message_id):
+    """Admin-only: delete a persisted admin announcement and broadcast deletion."""
+    if not ObjectId.is_valid(message_id):
+        return jsonify({'status': 'error', 'message': 'Invalid message id.'}), 400
+
+    messages_collection = db[MESSAGES_COLLECTION]
+    result = messages_collection.delete_one({'_id': ObjectId(message_id)})
+    if result.deleted_count == 0:
+        return jsonify({'status': 'error', 'message': 'Message not found.'}), 404
+
+    payload = {'_id': message_id}
+    try:
+        socketio.emit('admin_message_deleted', payload)
+    except Exception as e:
+        # Deletion already happened; log and still return success.
+        app.logger.error(f"Failed to broadcast message deletion: {e}", exc_info=True)
+
+    return jsonify({'status': 'success', 'message': 'Message deleted.', 'id': message_id}), 200
 
 # --- Authentication Routes ---
 
