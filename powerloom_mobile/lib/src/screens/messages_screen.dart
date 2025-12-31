@@ -86,7 +86,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Messages', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+        Text('Message', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
         const SizedBox(height: 12),
 
         Text('Saved on this phone', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),

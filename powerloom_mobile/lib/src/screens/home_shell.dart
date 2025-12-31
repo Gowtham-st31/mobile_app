@@ -128,7 +128,7 @@ class _HomeShellState extends State<HomeShell> {
       if (isAdmin) const NavigationDestination(icon: Icon(Icons.edit_note), label: 'Enter'),
       const NavigationDestination(icon: Icon(Icons.receipt_long), label: 'Reports'),
       const NavigationDestination(icon: Icon(Icons.insights), label: 'Graphs'),
-      const NavigationDestination(icon: Icon(Icons.notifications), label: 'Messages'),
+      const NavigationDestination(icon: Icon(Icons.notifications), label: 'Message'),
       const NavigationDestination(icon: Icon(Icons.person), label: 'Profile'),
       if (isAdmin) const NavigationDestination(icon: Icon(Icons.admin_panel_settings), label: 'Admin'),
     ];
@@ -142,7 +142,7 @@ class _HomeShellState extends State<HomeShell> {
           padding: const EdgeInsets.all(10),
           child: Image.asset('assets/logo.png', fit: BoxFit.contain),
         ),
-        title: Text('Powerloom DMS (${widget.session.username})'),
+        title: Text('Vinayaga Tex (${widget.session.username})'),
         actions: [
           IconButton(
             tooltip: 'Logout',

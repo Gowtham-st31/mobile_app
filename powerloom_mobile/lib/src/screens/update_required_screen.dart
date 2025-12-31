@@ -60,8 +60,8 @@ class UpdateRequiredScreen extends StatelessWidget {
                             style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
                           ),
                           const SizedBox(height: 12),
-                          Text(
-                            'A newer version of Powerloom DMS is available.\n\nPlease update to continue using the app.',
+                            Text(
+                              'A newer version of Vinayaga Tex is available.\n\nPlease update to continue using the app.',
                             textAlign: TextAlign.center,
                             style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurface.withValues(alpha: 0.85)),
                           ),

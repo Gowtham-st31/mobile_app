@@ -59,7 +59,18 @@ class _PowerloomAppState extends State<PowerloomApp> {
 
   Future<void> _checkForForcedUpdate() async {
     try {
-      final service = AppUpdateService(dio: Dio());
+      final service = AppUpdateService(
+        dio: Dio(
+          BaseOptions(
+            connectTimeout: const Duration(seconds: 45),
+            receiveTimeout: const Duration(seconds: 60),
+            sendTimeout: const Duration(seconds: 60),
+            headers: const {
+              'Accept': 'application/json',
+            },
+          ),
+        ),
+      );
       final latest = await service.fetchLatestAppVersion(baseUrl: widget.controller.baseUrl);
       if (latest == null) return;
 
@@ -165,7 +176,7 @@ class _PowerloomAppState extends State<PowerloomApp> {
 
         return MaterialApp(
           debugShowCheckedModeBanner: false,
-          title: 'Powerloom DMS',
+          title: 'Vinayaga Tex',
           theme: theme,
           home: isUpdateRequired
               ? UpdateRequiredScreen(
