@@ -730,7 +730,6 @@
                         <div class="border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
                             <div class="bg-gray-50/80 backdrop-blur-sm px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                                 <h3 class="text-base font-bold text-gray-800">Warp Update History</h3>
-                                <button id="clearWarpHistoryBtn" class="text-xs text-red-600 hover:text-red-800 font-bold hover:underline uppercase tracking-wide">Clear History</button>
                             </div>
                             <div id="warpHistoryTableContainer" class="overflow-x-auto">
                                 <table id="warpHistoryTable" class="min-w-full divide-y divide-gray-200">
@@ -2631,7 +2630,10 @@
         }
 
         // Attach event listener for Clear Warp History button
-        document.getElementById('clearWarpHistoryBtn').addEventListener('click', clearWarpHistory);
+        const clearWarpHistoryBtn = document.getElementById('clearWarpHistoryBtn');
+        if (clearWarpHistoryBtn) {
+            clearWarpHistoryBtn.addEventListener('click', clearWarpHistory);
+        }
 
         // Fetch users for admin panel (existing function)
         async function fetchUsers() {
