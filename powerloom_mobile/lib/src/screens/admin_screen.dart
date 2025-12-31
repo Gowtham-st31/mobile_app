@@ -175,7 +175,7 @@ class _AdminScreenState extends State<AdminScreen> {
               ...messages.take(10).map(
                     (m) {
                       final canDeleteLocal = m.id.startsWith('local:');
-                      final canDeleteGlobal = !canDeleteLocal && m.id.trim().isNotEmpty;
+                      final canDeleteGlobal = !canDeleteLocal && RegExp(r'^[a-f0-9]{24}$', caseSensitive: false).hasMatch(m.id.trim());
                       return Card(
                         child: ListTile(
                           title: Text(m.message),

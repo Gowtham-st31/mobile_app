@@ -318,10 +318,11 @@ class AppController extends ChangeNotifier {
     Future<void> tick({required bool silent}) async {
       try {
         final list = await api.getAnnouncements();
-        if (list.isEmpty) return;
 
         // Reconcile deletions: if a server message is missing from the server list,
         // remove it locally (covers clients that missed realtime delete).
+        // IMPORTANT: this must also run when the server list is empty, otherwise
+        // deleted messages can remain stuck on other devices.
         final serverIds = list.map((a) => a.id).where((id) => id.trim().isNotEmpty).toSet();
         final existing = _storedAdminMessages;
         final pruned = existing.where((m) {
@@ -336,6 +337,8 @@ class AppController extends ChangeNotifier {
           }
           notifyListeners();
         }
+
+        if (list.isEmpty) return;
 
         // API returns newest-first.
         final newest = list.first;

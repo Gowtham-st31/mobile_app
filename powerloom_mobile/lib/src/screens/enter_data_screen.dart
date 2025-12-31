@@ -73,8 +73,6 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Data added successfully.')));
-      _metersController.clear();
-      _salaryController.clear();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
