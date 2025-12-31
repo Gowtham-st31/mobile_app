@@ -245,6 +245,27 @@ class AppController extends ChangeNotifier {
   Future<void> sendAnnouncement(String message) async {
     await api.broadcastAnnouncement(message: message);
     // History is stored server-side and will arrive via Socket.IO and/or polling.
+
+    // Also do an immediate pull so the sender sees the server-assigned id right away
+    // and so we confirm persistence even if realtime delivery is delayed.
+    try {
+      final list = await api.getAnnouncements();
+      for (final a in list.reversed) {
+        unawaited(
+          storeIncomingAdminPayload({
+            '_id': a.id,
+            'message': a.message,
+            'sender': a.sender,
+            'created_at': a.createdAt,
+          }),
+        );
+      }
+      if (list.isNotEmpty) {
+        _lastSeenAnnouncementId = list.first.id;
+      }
+    } catch (_) {
+      // Ignore: broadcast succeeded; polling will pick it up.
+    }
   }
 
   Future<void> _loadLocalMessagesForCurrentUser() async {
