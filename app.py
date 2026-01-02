@@ -56,6 +56,16 @@ from flask_socketio import SocketIO, emit
 # Import requests at the top level to ensure it's always available for AI API calls
 import requests 
 
+# Optional Firebase Admin SDK (used for FCM push notifications). If it's not
+# installed/configured, the app continues to work with in-app realtime/polling.
+try:
+    import firebase_admin  # type: ignore
+    from firebase_admin import credentials, messaging  # type: ignore
+except Exception:
+    firebase_admin = None
+    credentials = None
+    messaging = None
+
 # Configure logging to show debug messages
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -272,6 +282,90 @@ WARP_DATA_COLLECTION = os.getenv("WARP_DATA_COLLECTION", "warp_status")
 WARP_HISTORY_COLLECTION = os.getenv("WARP_HISTORY_COLLECTION", "warp_history")
 MESSAGES_COLLECTION = os.getenv("MESSAGES_COLLECTION", "messages")
 
+# Mobile push (FCM)
+FCM_TOKENS_COLLECTION = os.getenv("FCM_TOKENS_COLLECTION", "fcm_tokens")
+
+
+_firebase_app = None
+
+
+def _get_firebase_app():
+    """Return initialized Firebase app or None.
+
+    Configure via one of:
+    - FIREBASE_SERVICE_ACCOUNT_JSON: full JSON string of the service account
+    - FIREBASE_SERVICE_ACCOUNT_FILE: absolute/relative path to JSON file
+    """
+
+    global _firebase_app
+    if _firebase_app is not None:
+        return _firebase_app
+
+    if firebase_admin is None or credentials is None:
+        return None
+
+    raw_json = (os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") or "").strip()
+    json_path = (os.getenv("FIREBASE_SERVICE_ACCOUNT_FILE") or "").strip()
+
+    if not raw_json and not json_path:
+        return None
+
+    try:
+        if raw_json:
+            info = json.loads(raw_json)
+            cred = credentials.Certificate(info)
+        else:
+            cred = credentials.Certificate(json_path)
+
+        _firebase_app = firebase_admin.initialize_app(cred)
+        app.logger.info("Firebase Admin initialized successfully")
+        return _firebase_app
+    except Exception as exc:
+        app.logger.error("Failed to initialize Firebase Admin: %s", exc, exc_info=True)
+        _firebase_app = None
+        return None
+
+
+def _send_fcm_push_to_all(db, *, title: str, body: str, data=None) -> int:
+    """Best-effort push to all registered FCM tokens. Returns attempted token count."""
+
+    fb_app = _get_firebase_app()
+    if fb_app is None or messaging is None:
+        return 0
+
+    tokens_collection = db[FCM_TOKENS_COLLECTION]
+    cursor = tokens_collection.find({}, {"token": 1})
+    tokens = []
+    for doc in cursor:
+        t = (doc.get("token") or "").strip()
+        if t:
+            tokens.append(t)
+
+    if not tokens:
+        return 0
+
+    payload_data = {}
+    if data:
+        payload_data = {str(k): str(v) for k, v in dict(data).items()}
+
+    msg = messaging.MulticastMessage(
+        tokens=tokens,
+        notification=messaging.Notification(title=title, body=body),
+        data=payload_data,
+        android=messaging.AndroidConfig(priority="high"),
+    )
+
+    try:
+        response = messaging.send_multicast(msg, app=fb_app)
+        failures = getattr(response, "failure_count", 0)
+        successes = getattr(response, "success_count", 0)
+        app.logger.info("FCM push sent (success=%s, failure=%s, total=%s)", successes, failures, len(tokens))
+    except Exception as exc:
+        app.logger.error("FCM push send failed: %s", exc, exc_info=True)
+        return len(tokens)
+
+    return len(tokens)
+
 
 # Timezone Configuration for Indian Standard Time (IST)
 IST = pytz.timezone('Asia/Kolkata')
@@ -388,6 +482,31 @@ def admin_required(f):
 # --- Messages / Announcements (notification-only) ---
 
 
+@app.route('/api/mobile/fcm/register', methods=['POST'])
+@login_required
+@handle_db_errors
+def register_fcm_token(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
+    """Register/update this device's FCM token for push notifications."""
+    data = request.get_json(silent=True) or {}
+    token = (data.get('token') or '').strip()
+    if not token:
+        return jsonify({'status': 'error', 'message': 'token is required'}), 400
+
+    username = (session.get('username') or '').strip()
+    if not username:
+        return jsonify({'status': 'error', 'message': 'Unauthorized. Please log in.'}), 401
+
+    now = datetime.now(timezone.utc).isoformat()
+    tokens_collection = db[FCM_TOKENS_COLLECTION]
+    tokens_collection.update_one(
+        {'token': token},
+        {'$set': {'token': token, 'username': username, 'updated_at': now}},
+        upsert=True,
+    )
+
+    return jsonify({'status': 'success'}), 200
+
+
 @app.route('/messages', methods=['GET'])
 @login_required
 @handle_db_errors
@@ -441,10 +560,21 @@ def broadcast_message(client, db, loom_collection, users_collection, warp_data_c
 
     try:
         socketio.emit('admin_message', payload)
-        return jsonify({'status': 'success', 'message': 'Notification sent.'}), 200
     except Exception as e:
-        app.logger.error(f"Failed to broadcast message: {e}", exc_info=True)
-        return jsonify({'status': 'error', 'message': 'Failed to send message.'}), 500
+        # Message is still persisted; treat realtime emit as best-effort.
+        app.logger.error(f"Failed to broadcast message via Socket.IO: {e}", exc_info=True)
+
+    try:
+        _send_fcm_push_to_all(
+            db,
+            title="Vinayaga Tex",
+            body=message,
+            data={"type": "admin_message", "id": payload.get("_id", "")},
+        )
+    except Exception as e:
+        app.logger.error(f"Failed to send FCM push: {e}", exc_info=True)
+
+    return jsonify({'status': 'success', 'message': 'Notification sent.'}), 200
 
 
 @app.route('/admin/messages/<message_id>', methods=['DELETE'])

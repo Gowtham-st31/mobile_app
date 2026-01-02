@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'api/api_client.dart';
 import 'models/announcement.dart';
@@ -25,6 +26,10 @@ class AppController extends ChangeNotifier {
 
   Timer? _messagePoller;
   String? _lastSeenAnnouncementId;
+
+  StreamSubscription<String>? _fcmTokenRefreshSub;
+  StreamSubscription<RemoteMessage>? _fcmForegroundMessageSub;
+  bool _fcmForegroundListening = false;
 
   int _adminMessageVersion = 0;
   Map<String, dynamic>? _lastAdminMessage;
@@ -145,6 +150,7 @@ class AppController extends ChangeNotifier {
     await _initApi();
 
     await _notifications.init();
+    await _ensureFcmForegroundListener();
 
     // Try to restore session from persisted cookies.
     try {
@@ -154,6 +160,8 @@ class AppController extends ChangeNotifier {
       await _loadLocalMessagesForCurrentUser();
       _startRealtime();
       _startMessagePolling();
+      await _registerFcmTokenIfPossible();
+      _listenForFcmTokenRefresh();
     } catch (_) {
       _profile = null;
       _session = null;
@@ -203,6 +211,8 @@ class AppController extends ChangeNotifier {
     await _loadLocalMessagesForCurrentUser();
     _startRealtime();
     _startMessagePolling();
+    await _registerFcmTokenIfPossible();
+    _listenForFcmTokenRefresh();
     notifyListeners();
   }
 
@@ -218,6 +228,13 @@ class AppController extends ChangeNotifier {
   Future<void> logout() async {
     await api.logout();
     _realtime.disconnect();
+
+    await _fcmTokenRefreshSub?.cancel();
+    _fcmTokenRefreshSub = null;
+
+    await _fcmForegroundMessageSub?.cancel();
+    _fcmForegroundMessageSub = null;
+    _fcmForegroundListening = false;
     _messagePoller?.cancel();
     _messagePoller = null;
     _lastSeenAnnouncementId = null;
@@ -225,6 +242,55 @@ class AppController extends ChangeNotifier {
     _profile = null;
     _storedAdminMessages = const [];
     notifyListeners();
+  }
+
+  Future<void> _ensureFcmForegroundListener() async {
+    if (_fcmForegroundListening) return;
+    _fcmForegroundListening = true;
+
+    try {
+      // On iOS this matters; on Android it's effectively a no-op.
+      await FirebaseMessaging.instance.requestPermission();
+    } catch (_) {
+      // Ignore.
+    }
+
+    _fcmForegroundMessageSub = FirebaseMessaging.onMessage.listen((message) {
+      final title = message.notification?.title?.trim().isNotEmpty == true ? message.notification!.title!.trim() : 'Admin message';
+
+      String body = (message.notification?.body ?? '').trim();
+      if (body.isEmpty) {
+        final fromData = (message.data['message'] ?? message.data['body'] ?? '').toString().trim();
+        body = fromData;
+      }
+
+      if (body.isEmpty) return;
+      _notifications.showAdminMessage(title: title, body: body);
+    });
+  }
+
+  Future<void> _registerFcmTokenIfPossible() async {
+    if (_session == null) return;
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null || token.trim().isEmpty) return;
+      await api.registerFcmToken(token: token.trim());
+    } catch (_) {
+      // Ignore: push is best-effort.
+    }
+  }
+
+  void _listenForFcmTokenRefresh() {
+    if (_session == null) return;
+    _fcmTokenRefreshSub?.cancel();
+    _fcmTokenRefreshSub = FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+      try {
+        if (token.trim().isEmpty) return;
+        await api.registerFcmToken(token: token.trim());
+      } catch (_) {
+        // Ignore: push is best-effort.
+      }
+    });
   }
 
   void _invalidateSession() {

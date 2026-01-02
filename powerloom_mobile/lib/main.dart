@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:dio/dio.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'src/app_controller.dart';
 import 'src/screens/home_shell.dart';
@@ -9,8 +11,17 @@ import 'src/screens/login_screen.dart';
 import 'src/screens/update_required_screen.dart';
 import 'src/services/app_update_service.dart';
 
-void main() {
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // Required for background/terminated FCM delivery.
+  await Firebase.initializeApp();
+}
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // Default base URL:
   // - Release builds: Render deployment (HTTPS)

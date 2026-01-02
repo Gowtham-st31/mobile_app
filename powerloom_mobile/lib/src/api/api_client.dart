@@ -150,6 +150,22 @@ class ApiClient {
     }
   }
 
+  Future<void> registerFcmToken({required String token}) async {
+    try {
+      final response = await _dio.post(
+        '/api/mobile/fcm/register',
+        data: {'token': token},
+        options: Options(headers: {'Content-Type': 'application/json'}),
+      );
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] == 'success') return;
+      throw ApiException((data['message'] ?? 'Failed to register push token').toString(), statusCode: response.statusCode);
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to register push token';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
   Future<void> addLoomData({
     required String loomerName,
     required String loomNumber,
