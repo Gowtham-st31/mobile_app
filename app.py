@@ -364,78 +364,67 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
     if data:
         payload_data = {str(k): str(v) for k, v in dict(data).items()}
 
-    msg = messaging.MulticastMessage(
-        tokens=tokens,
-        notification=messaging.Notification(title=title, body=body),
-        data=payload_data,
-        android=messaging.AndroidConfig(priority="high"),
-    )
+    notification = messaging.Notification(title=title, body=body)
+    android_cfg = messaging.AndroidConfig(priority="high")
 
-    try:
-        response = messaging.send_multicast(msg, app=fb_app)
-        failures = int(getattr(response, "failure_count", 0) or 0)
-        successes = int(getattr(response, "success_count", 0) or 0)
+    # NOTE: We intentionally avoid the batch/multicast send here.
+    # Some environments return HTTP 404 for the legacy batch endpoint.
+    successes = 0
+    failures = 0
+    error_codes = {}
+    error_samples = {}
+    invalid = []
 
-        error_codes = {}
-        error_samples = {}
-
-        invalid = []
-        # Try to prune invalid/unregistered tokens.
-        # BatchResponse.responses[i] corresponds to tokens[i].
-        resp_list = getattr(response, "responses", None)
-        if isinstance(resp_list, list):
-            for i, r in enumerate(resp_list):
-                exc = getattr(r, "exception", None)
-                if exc is None:
-                    continue
-                msg_txt = str(exc)
-                code = getattr(exc, "code", "")
-                code_str = (str(code).strip() or exc.__class__.__name__).upper()
-                error_codes[code_str] = int(error_codes.get(code_str, 0) or 0) + 1
-                if code_str not in error_samples:
-                    # Keep one short sample per code for debugging.
-                    error_samples[code_str] = (msg_txt[:180] + "…") if len(msg_txt) > 180 else msg_txt
-                # Heuristics: firebase_admin.messaging errors vary by version.
-                if "registration-token" in msg_txt.lower() and "not a valid" in msg_txt.lower():
-                    invalid.append(tokens[i])
-                elif "unregistered" in msg_txt.lower() or "registration token is not registered" in msg_txt.lower():
-                    invalid.append(tokens[i])
-                elif str(code).lower() in {"unregistered", "invalid-argument"}:
-                    invalid.append(tokens[i])
-
-        invalid_removed = 0
-        if invalid:
-            try:
-                res = tokens_collection.delete_many({"token": {"$in": invalid}})
-                invalid_removed = int(getattr(res, "deleted_count", 0) or 0)
-            except Exception as exc:
-                app.logger.error("Failed pruning invalid FCM tokens: %s", exc, exc_info=True)
-
-        app.logger.info(
-            "FCM push sent (success=%s, failure=%s, total=%s, invalid_removed=%s)",
-            successes,
-            failures,
-            len(tokens),
-            invalid_removed,
+    for token in tokens:
+        msg = messaging.Message(
+            token=token,
+            notification=notification,
+            data=payload_data,
+            android=android_cfg,
         )
-        return {
-            "attempted": len(tokens),
-            "success": successes,
-            "failure": failures,
-            "invalid_removed": invalid_removed,
-            "error_codes": error_codes,
-            "error_samples": error_samples,
-        }
-    except Exception as exc:
-        app.logger.error("FCM push send failed: %s", exc, exc_info=True)
-        return {
-            "attempted": len(tokens),
-            "success": 0,
-            "failure": len(tokens),
-            "invalid_removed": 0,
-            "error_codes": {"SEND_EXCEPTION": 1},
-            "error_samples": {"SEND_EXCEPTION": str(exc)[:180]},
-        }
+        try:
+            messaging.send(msg, app=fb_app)
+            successes += 1
+        except Exception as exc:
+            failures += 1
+            msg_txt = str(exc)
+            code = getattr(exc, "code", "")
+            code_str = (str(code).strip() or exc.__class__.__name__).upper()
+            error_codes[code_str] = int(error_codes.get(code_str, 0) or 0) + 1
+            if code_str not in error_samples:
+                error_samples[code_str] = (msg_txt[:180] + "…") if len(msg_txt) > 180 else msg_txt
+
+            lower = msg_txt.lower()
+            if "registration-token" in lower and "not a valid" in lower:
+                invalid.append(token)
+            elif "unregistered" in lower or "registration token is not registered" in lower:
+                invalid.append(token)
+            elif str(code).lower() in {"unregistered", "invalid-argument"}:
+                invalid.append(token)
+
+    invalid_removed = 0
+    if invalid:
+        try:
+            res = tokens_collection.delete_many({"token": {"$in": invalid}})
+            invalid_removed = int(getattr(res, "deleted_count", 0) or 0)
+        except Exception as exc:
+            app.logger.error("Failed pruning invalid FCM tokens: %s", exc, exc_info=True)
+
+    app.logger.info(
+        "FCM push sent (success=%s, failure=%s, total=%s, invalid_removed=%s)",
+        successes,
+        failures,
+        len(tokens),
+        invalid_removed,
+    )
+    return {
+        "attempted": len(tokens),
+        "success": successes,
+        "failure": failures,
+        "invalid_removed": invalid_removed,
+        "error_codes": error_codes,
+        "error_samples": error_samples,
+    }
 
 
 # Timezone Configuration for Indian Standard Time (IST)
