@@ -326,12 +326,16 @@ def _get_firebase_app():
         return None
 
 
-def _send_fcm_push_to_all(db, *, title: str, body: str, data=None) -> int:
-    """Best-effort push to all registered FCM tokens. Returns attempted token count."""
+def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
+        """Best-effort push to all registered FCM tokens.
+
+        Returns a dict like:
+            {"attempted": int, "success": int, "failure": int, "invalid_removed": int}
+        """
 
     fb_app = _get_firebase_app()
     if fb_app is None or messaging is None:
-        return 0
+        return {"attempted": 0, "success": 0, "failure": 0, "invalid_removed": 0}
 
     tokens_collection = db[FCM_TOKENS_COLLECTION]
     cursor = tokens_collection.find({}, {"token": 1})
@@ -342,7 +346,7 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None) -> int:
             tokens.append(t)
 
     if not tokens:
-        return 0
+        return {"attempted": 0, "success": 0, "failure": 0, "invalid_removed": 0}
 
     payload_data = {}
     if data:
@@ -357,14 +361,52 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None) -> int:
 
     try:
         response = messaging.send_multicast(msg, app=fb_app)
-        failures = getattr(response, "failure_count", 0)
-        successes = getattr(response, "success_count", 0)
-        app.logger.info("FCM push sent (success=%s, failure=%s, total=%s)", successes, failures, len(tokens))
+        failures = int(getattr(response, "failure_count", 0) or 0)
+        successes = int(getattr(response, "success_count", 0) or 0)
+
+        invalid = []
+        # Try to prune invalid/unregistered tokens.
+        # BatchResponse.responses[i] corresponds to tokens[i].
+        resp_list = getattr(response, "responses", None)
+        if isinstance(resp_list, list):
+            for i, r in enumerate(resp_list):
+                exc = getattr(r, "exception", None)
+                if exc is None:
+                    continue
+                msg_txt = str(exc)
+                code = getattr(exc, "code", "")
+                # Heuristics: firebase_admin.messaging errors vary by version.
+                if "registration-token" in msg_txt.lower() and "not a valid" in msg_txt.lower():
+                    invalid.append(tokens[i])
+                elif "unregistered" in msg_txt.lower() or "registration token is not registered" in msg_txt.lower():
+                    invalid.append(tokens[i])
+                elif str(code).lower() in {"unregistered", "invalid-argument"}:
+                    invalid.append(tokens[i])
+
+        invalid_removed = 0
+        if invalid:
+            try:
+                res = tokens_collection.delete_many({"token": {"$in": invalid}})
+                invalid_removed = int(getattr(res, "deleted_count", 0) or 0)
+            except Exception as exc:
+                app.logger.error("Failed pruning invalid FCM tokens: %s", exc, exc_info=True)
+
+        app.logger.info(
+            "FCM push sent (success=%s, failure=%s, total=%s, invalid_removed=%s)",
+            successes,
+            failures,
+            len(tokens),
+            invalid_removed,
+        )
+        return {
+            "attempted": len(tokens),
+            "success": successes,
+            "failure": failures,
+            "invalid_removed": invalid_removed,
+        }
     except Exception as exc:
         app.logger.error("FCM push send failed: %s", exc, exc_info=True)
-        return len(tokens)
-
-    return len(tokens)
+        return {"attempted": len(tokens), "success": 0, "failure": len(tokens), "invalid_removed": 0}
 
 
 # Timezone Configuration for Indian Standard Time (IST)
@@ -518,8 +560,10 @@ def admin_list_fcm_tokens(client, db, loom_collection, users_collection, warp_da
     cursor = tokens_collection.find({}, {'token': 1, 'username': 1, 'updated_at': 1}).sort('updated_at', -1).limit(50)
     items = []
     for doc in cursor:
+        token = str(doc.get('token', '') or '')
+        suffix = token[-12:] if len(token) >= 12 else token
         items.append({
-            'token': str(doc.get('token', '')),
+            'token_suffix': suffix,
             'username': str(doc.get('username', '')),
             'updated_at': str(doc.get('updated_at', '')),
         })
@@ -534,14 +578,15 @@ def admin_test_fcm_push(client, db, loom_collection, users_collection, warp_data
     """Admin-only: send a test FCM push to all registered tokens."""
     data = request.get_json(silent=True) or {}
     message = (data.get('message') or request.args.get('message') or 'Test notification').strip()
-    attempted = _send_fcm_push_to_all(db, title='Vinayaga Tex', body=message, data={'type': 'test'})
+    result = _send_fcm_push_to_all(db, title='Vinayaga Tex', body=message, data={'type': 'test'})
+    attempted = int(result.get('attempted', 0) or 0)
     if attempted == 0:
         return jsonify({
             'status': 'error',
             'message': 'No push sent. Either Firebase Admin is not configured on the server or no devices have registered tokens yet.',
-            'attempted': attempted,
+            **result,
         }), 400
-    return jsonify({'status': 'success', 'attempted': attempted}), 200
+    return jsonify({'status': 'success', **result}), 200
 
 
 @app.route('/messages', methods=['GET'])
