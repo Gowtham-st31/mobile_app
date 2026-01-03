@@ -526,14 +526,14 @@ def admin_list_fcm_tokens(client, db, loom_collection, users_collection, warp_da
     return jsonify({'status': 'success', 'count': total, 'tokens': items}), 200
 
 
-@app.route('/admin/fcm/test_push', methods=['POST'])
+@app.route('/admin/fcm/test_push', methods=['GET', 'POST'])
 @login_required
 @admin_required
 @handle_db_errors
 def admin_test_fcm_push(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
     """Admin-only: send a test FCM push to all registered tokens."""
     data = request.get_json(silent=True) or {}
-    message = (data.get('message') or 'Test notification').strip()
+    message = (data.get('message') or request.args.get('message') or 'Test notification').strip()
     attempted = _send_fcm_push_to_all(db, title='Vinayaga Tex', body=message, data={'type': 'test'})
     if attempted == 0:
         return jsonify({
