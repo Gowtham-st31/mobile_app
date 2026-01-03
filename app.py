@@ -507,6 +507,43 @@ def register_fcm_token(client, db, loom_collection, users_collection, warp_data_
     return jsonify({'status': 'success'}), 200
 
 
+@app.route('/admin/fcm/tokens', methods=['GET'])
+@login_required
+@admin_required
+@handle_db_errors
+def admin_list_fcm_tokens(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
+    """Admin-only: inspect registered FCM tokens (for debugging)."""
+    tokens_collection = db[FCM_TOKENS_COLLECTION]
+    total = tokens_collection.count_documents({})
+    cursor = tokens_collection.find({}, {'token': 1, 'username': 1, 'updated_at': 1}).sort('updated_at', -1).limit(50)
+    items = []
+    for doc in cursor:
+        items.append({
+            'token': str(doc.get('token', '')),
+            'username': str(doc.get('username', '')),
+            'updated_at': str(doc.get('updated_at', '')),
+        })
+    return jsonify({'status': 'success', 'count': total, 'tokens': items}), 200
+
+
+@app.route('/admin/fcm/test_push', methods=['POST'])
+@login_required
+@admin_required
+@handle_db_errors
+def admin_test_fcm_push(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
+    """Admin-only: send a test FCM push to all registered tokens."""
+    data = request.get_json(silent=True) or {}
+    message = (data.get('message') or 'Test notification').strip()
+    attempted = _send_fcm_push_to_all(db, title='Vinayaga Tex', body=message, data={'type': 'test'})
+    if attempted == 0:
+        return jsonify({
+            'status': 'error',
+            'message': 'No push sent. Either Firebase Admin is not configured on the server or no devices have registered tokens yet.',
+            'attempted': attempted,
+        }), 400
+    return jsonify({'status': 'success', 'attempted': attempted}), 200
+
+
 @app.route('/messages', methods=['GET'])
 @login_required
 @handle_db_errors
