@@ -327,11 +327,11 @@ def _get_firebase_app():
 
 
 def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
-        """Best-effort push to all registered FCM tokens.
+    """Best-effort push to all registered FCM tokens.
 
-        Returns a dict like:
-            {"attempted": int, "success": int, "failure": int, "invalid_removed": int}
-        """
+    Returns a dict like:
+      {"attempted": int, "success": int, "failure": int, "invalid_removed": int}
+    """
 
     fb_app = _get_firebase_app()
     if fb_app is None or messaging is None:
