@@ -335,7 +335,13 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
 
     fb_app = _get_firebase_app()
     if fb_app is None or messaging is None:
-        return {"attempted": 0, "success": 0, "failure": 0, "invalid_removed": 0}
+        return {
+            "attempted": 0,
+            "success": 0,
+            "failure": 0,
+            "invalid_removed": 0,
+            "error_codes": {"NOT_CONFIGURED": 1},
+        }
 
     tokens_collection = db[FCM_TOKENS_COLLECTION]
     cursor = tokens_collection.find({}, {"token": 1})
@@ -346,7 +352,13 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
             tokens.append(t)
 
     if not tokens:
-        return {"attempted": 0, "success": 0, "failure": 0, "invalid_removed": 0}
+        return {
+            "attempted": 0,
+            "success": 0,
+            "failure": 0,
+            "invalid_removed": 0,
+            "error_codes": {"NO_TOKENS": 1},
+        }
 
     payload_data = {}
     if data:
@@ -364,6 +376,9 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
         failures = int(getattr(response, "failure_count", 0) or 0)
         successes = int(getattr(response, "success_count", 0) or 0)
 
+        error_codes = {}
+        error_samples = {}
+
         invalid = []
         # Try to prune invalid/unregistered tokens.
         # BatchResponse.responses[i] corresponds to tokens[i].
@@ -375,6 +390,11 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
                     continue
                 msg_txt = str(exc)
                 code = getattr(exc, "code", "")
+                code_str = (str(code).strip() or exc.__class__.__name__).upper()
+                error_codes[code_str] = int(error_codes.get(code_str, 0) or 0) + 1
+                if code_str not in error_samples:
+                    # Keep one short sample per code for debugging.
+                    error_samples[code_str] = (msg_txt[:180] + "…") if len(msg_txt) > 180 else msg_txt
                 # Heuristics: firebase_admin.messaging errors vary by version.
                 if "registration-token" in msg_txt.lower() and "not a valid" in msg_txt.lower():
                     invalid.append(tokens[i])
@@ -403,10 +423,19 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
             "success": successes,
             "failure": failures,
             "invalid_removed": invalid_removed,
+            "error_codes": error_codes,
+            "error_samples": error_samples,
         }
     except Exception as exc:
         app.logger.error("FCM push send failed: %s", exc, exc_info=True)
-        return {"attempted": len(tokens), "success": 0, "failure": len(tokens), "invalid_removed": 0}
+        return {
+            "attempted": len(tokens),
+            "success": 0,
+            "failure": len(tokens),
+            "invalid_removed": 0,
+            "error_codes": {"SEND_EXCEPTION": 1},
+            "error_samples": {"SEND_EXCEPTION": str(exc)[:180]},
+        }
 
 
 # Timezone Configuration for Indian Standard Time (IST)
