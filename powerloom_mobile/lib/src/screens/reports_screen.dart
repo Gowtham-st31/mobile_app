@@ -29,6 +29,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
   ReportResult? _result;
   bool _downloadingPdf = false;
 
+  bool _aiLoading = false;
+  String? _aiAnalysis;
+
+  final _aiQuestionController = TextEditingController();
+  bool _aiAsking = false;
+  String? _aiAnswer;
+
   bool get _isAdmin => widget.session.role.toLowerCase() == 'admin';
 
   @override
@@ -41,6 +48,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   void dispose() {
     _loomerController.dispose();
     _loomController.dispose();
+    _aiQuestionController.dispose();
     super.dispose();
   }
 
@@ -129,6 +137,63 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _analyzeWithAi() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _aiLoading = true;
+      _aiAnalysis = null;
+      _aiAnswer = null;
+      _aiQuestionController.text = '';
+    });
+
+    try {
+      final fromStr = DateFormat('yyyy-MM-dd').format(_from);
+      final toStr = DateFormat('yyyy-MM-dd').format(_to);
+
+      final analysis = await widget.controller.api.analyzeReportWithAi(
+        loomerName: _loomerController.text.trim().toLowerCase(),
+        shift: _shift,
+        loomNumber: _loomController.text.trim().toLowerCase(),
+        fromDateYYYYMMDD: fromStr,
+        toDateYYYYMMDD: toStr,
+      );
+
+      if (!mounted) return;
+      setState(() => _aiAnalysis = analysis);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _aiLoading = false);
+    }
+  }
+
+  Future<void> _askAi() async {
+    final q = _aiQuestionController.text.trim();
+    if (q.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a question')));
+      return;
+    }
+    setState(() {
+      _aiAsking = true;
+      _aiAnswer = null;
+    });
+    try {
+      final ans = await widget.controller.api.askAiQuestion(question: q);
+      if (!mounted) return;
+      setState(() {
+        _aiAnswer = ans;
+        _aiQuestionController.text = '';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _aiAsking = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final result = _result;
@@ -206,9 +271,67 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       : const Text('Generate Report'),
                 ),
               ),
+
+              if (_isAdmin) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonal(
+                    onPressed: (_loading || _aiLoading) ? null : _analyzeWithAi,
+                    child: _aiLoading
+                        ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Text('Analyze Report with AI'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
+
+        if (_isAdmin && _aiAnalysis != null) ...[
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('AI Analysis', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  SelectableText(_aiAnalysis!),
+                  const SizedBox(height: 12),
+                  Text('Ask a follow-up question', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _aiQuestionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Question',
+                      hintText: 'e.g., Which loom performed best?',
+                    ),
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _aiAsking ? null : _askAi(),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _aiAsking ? null : _askAi,
+                      child: _aiAsking
+                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text('Ask AI'),
+                    ),
+                  ),
+                  if (_aiAnswer != null) ...[
+                    const SizedBox(height: 12),
+                    Text('AI Answer', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 8),
+                    SelectableText(_aiAnswer!),
+                  ]
+                ],
+              ),
+            ),
+          ),
+        ],
 
         if (result != null) ...[
           const SizedBox(height: 16),

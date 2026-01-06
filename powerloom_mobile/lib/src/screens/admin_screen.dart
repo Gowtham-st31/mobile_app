@@ -41,6 +41,7 @@ class _AdminScreenState extends State<AdminScreen> {
   List<Map<String, dynamic>> _users = const [];
 
   bool _busy = false;
+  bool _suggestingName = false;
 
   final _serverUrlController = TextEditingController();
 
@@ -147,6 +148,22 @@ class _AdminScreenState extends State<AdminScreen> {
 
   void _toast(String message) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _suggestNewUsername() async {
+    if (_suggestingName) return;
+    setState(() => _suggestingName = true);
+    try {
+      final name = await widget.controller.api.suggestLoomerName();
+      if (!mounted) return;
+      _newUsernameController.text = name.trim().toLowerCase();
+      _toast('Suggested name added');
+    } catch (e) {
+      if (!mounted) return;
+      _toast(e.toString());
+    } finally {
+      if (mounted) setState(() => _suggestingName = false);
+    }
   }
 
   String _formatCreatedAt(String raw) {
@@ -320,10 +337,24 @@ class _AdminScreenState extends State<AdminScreen> {
                 key: _addUserKey,
                 child: Column(
                   children: [
-                    TextFormField(
-                      controller: _newUsernameController,
-                      decoration: const InputDecoration(labelText: 'Username'),
-                      validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _newUsernameController,
+                            decoration: const InputDecoration(labelText: 'Username'),
+                            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: 'Suggest name',
+                          onPressed: (_busy || _suggestingName) ? null : _suggestNewUsername,
+                          icon: _suggestingName
+                              ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.auto_awesome),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 12),
                     TextFormField(

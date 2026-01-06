@@ -6,7 +6,12 @@ import sys
 try:
     from dotenv import load_dotenv  # type: ignore
 
-    load_dotenv()
+    # Use an absolute path so running from another CWD still loads correctly.
+    _dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_dotenv_path):
+        load_dotenv(_dotenv_path)
+    else:
+        load_dotenv()
 except Exception:
     pass
 
@@ -32,6 +37,8 @@ if SOCKETIO_ASYNC_MODE == "eventlet":
         SOCKETIO_ASYNC_MODE = "threading"
 import json
 from datetime import datetime, timedelta, timezone # Import UTC for timezone-aware datetimes
+import time
+import re
 import pytz
 import os.path
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, send_from_directory
@@ -169,6 +176,28 @@ def _int_env(name: str, default: int) -> int:
         return int(str(raw).strip())
     except Exception:
         return default
+
+
+def _parse_loom_numbers(raw: str | None) -> list[str] | None:
+    """Parse a loom number filter.
+
+    Accepts:
+    - "all" (or empty) -> None
+    - "1" -> ["1"]
+    - "1,2,3,4" / "1 2 3" -> ["1","2","3","4"]
+    """
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if not value or value == "all":
+        return None
+
+    tokens = [t.strip() for t in re.split(r"[\s,]+", value) if t and t.strip()]
+    if not tokens:
+        return None
+    if "all" in tokens:
+        return None
+    return tokens
 
 
 @app.get("/api/mobile/android/latest")
@@ -430,9 +459,96 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
 # Timezone Configuration for Indian Standard Time (IST)
 IST = pytz.timezone('Asia/Kolkata')
 
-# Configure the maximum number of detailed records to send to AI for analysis
-# Be cautious when increasing this value, as it can lead to exceeding the AI model's context window
-MAX_DETAILED_RECORDS_FOR_AI = 999999999999999999999999999999999999999
+# --- AI (Gemini) configuration ---
+# Default model: Gemma 3 4B IT (instruction-tuned chat).
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemma-3-4b-it").strip() or "gemma-3-4b-it"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+# Conservative defaults to avoid token/context blowups.
+AI_MAX_RECORDS_INITIAL = int(os.getenv("AI_MAX_RECORDS_INITIAL", "250"))
+AI_MAX_RECORDS_FOLLOWUP = int(os.getenv("AI_MAX_RECORDS_FOLLOWUP", "100"))
+
+GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
+
+
+def _extract_gemini_text(result_json: dict) -> str | None:
+    try:
+        candidates = result_json.get("candidates")
+        if not candidates:
+            return None
+        content = candidates[0].get("content") or {}
+        parts = content.get("parts") or []
+        if not parts:
+            return None
+        text = parts[0].get("text")
+        if text is None:
+            return None
+        return str(text)
+    except Exception:
+        return None
+
+
+def call_gemini_text(
+    prompt_text: str,
+    *,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+    retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> str:
+    """Calls Gemini generateContent and returns plain text.
+
+    Retries on HTTP 429 with exponential backoff: 1s -> 2s -> 4s.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set on the server.")
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": api_key,
+    }
+
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
+        "generationConfig": {
+            "temperature": GEMINI_TEMPERATURE if temperature is None else float(temperature),
+            "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS if max_output_tokens is None else int(max_output_tokens),
+        },
+    }
+
+    attempt = 0
+    delay = float(backoff_seconds)
+    while True:
+        attempt += 1
+        try:
+            response = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=60)
+        except requests.exceptions.RequestException as exc:
+            # Network error: don't retry endlessly; surface it.
+            raise RuntimeError(f"Failed to reach Gemini API: {exc}") from exc
+
+        if response.status_code == 429 and attempt <= retries:
+            time.sleep(delay)
+            delay *= 2
+            continue
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            # Try to surface a useful message (without leaking secrets).
+            body = None
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            raise RuntimeError(f"Gemini API error (HTTP {response.status_code}): {body}") from exc
+
+        result_json = response.json()
+        text = _extract_gemini_text(result_json)
+        if text is None:
+            raise RuntimeError(f"Unexpected Gemini response format: {result_json}")
+        return text
 
 
 from pymongo import MongoClient
@@ -1332,9 +1448,9 @@ def get_meters(client, db, loom_collection, users_collection, warp_data_collecti
     if shift_query != "all":
         query["shift"] = shift_query
 
-    loom_number_query = data["loom_number"].strip().lower()
-    if loom_number_query != "all":
-        query["loom_number"] = loom_number_query
+    loom_numbers = _parse_loom_numbers(data["loom_number"])
+    if loom_numbers:
+        query["loom_number"] = loom_numbers[0] if len(loom_numbers) == 1 else {"$in": loom_numbers}
 
     app.logger.debug(f"\n--- Debugging get_meters ---") # Keep debug for immediate console visibility
     app.logger.debug(f"Received form data: {data}")
@@ -1721,7 +1837,7 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
     from_date_str = data.get('from_date')
     to_date_str = data.get('to_date')
     shift_query = data.get('shift', '').strip().lower()
-    loom_number_query = data.get('loom_number', '').strip().lower()
+    loom_numbers = _parse_loom_numbers(data.get('loom_number', ''))
 
     if not from_date_str or not to_date_str:
         app.logger.warning(f"Missing date range for AI analysis from admin '{session['username']}'.")
@@ -1756,8 +1872,8 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
         query["loomer_name"] = loomer_name_input
     if shift_query and shift_query != "all":
         query["shift"] = shift_query
-    if loom_number_query and loom_number_query != "all":
-        query["loom_number"] = loom_number_query
+    if loom_numbers:
+        query["loom_number"] = loom_numbers[0] if len(loom_numbers) == 1 else {"$in": loom_numbers}
 
     app.logger.info(f"Admin '{session['username']}' requesting AI analysis for query: {query}.")
 
@@ -1773,15 +1889,19 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
             session.pop('last_report_summary', None)
             return jsonify({'status': 'info', 'message': 'No data found for the selected criteria to analyze.'}), 200
 
+        loomer_filter_label = "All Loomers" if (not loomer_name_input or loomer_name_input == "all") else loomer_name_input
+        shift_filter_label = "All Shifts" if (not shift_query or shift_query == "all") else shift_query
+        loom_number_filter_label = "All Loom Numbers" if not loom_numbers else ", ".join(loom_numbers)
+
         # Prepare data for AI prompt
         report_summary = {
             "total_meters_produced": total_meters,
             "total_salary_paid": f"{total_salary:.2f}",
             "number_of_records": len(records),
             "date_range": f"{from_date_str} to {to_date_str}",
-            "loomer_filter": loomer_name_input if loomer_name_input else "All Loomers",
-            "shift_filter": shift_query if shift_query else "All Shifts",
-            "loom_number_filter": loom_number_query if loom_number_query else "All Loom Numbers"
+            "loomer_filter": loomer_filter_label,
+            "shift_filter": shift_filter_label,
+            "loom_number_filter": loom_number_filter_label,
         }
         
         # Store query parameters and report summary in session for follow-up questions
@@ -1790,9 +1910,12 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
         session['last_report_summary'] = report_summary
 
 
-        # Limit detailed records sent to AI for the initial prompt to avoid exceeding context window
+        # Limit detailed records sent to AI to avoid exceeding context window.
+        # If there are more records than the limit, we still give the model the total count.
         detailed_records_for_ai = []
-        for record in records:
+        for i, record in enumerate(records):
+            if i >= AI_MAX_RECORDS_INITIAL:
+                break
             processed_record = convert_datetimes_to_iso(record.copy())
             detailed_records_for_ai.append(processed_record)
 
@@ -1805,7 +1928,9 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
         Overall Summary:
         {json.dumps(report_summary, indent=2)}
 
-        Sample Detailed Records (up to {MAX_DETAILED_RECORDS_FOR_AI} records):
+        Detailed Records Included: {len(detailed_records_for_ai)} of {len(records)} total records
+
+        Sample Detailed Records (up to {AI_MAX_RECORDS_INITIAL} records):
         {json.dumps(detailed_records_for_ai, indent=2)}
 
         Based on this data, please provide:
@@ -1815,47 +1940,19 @@ def analyze_report_with_ai(client, db, loom_collection, users_collection, warp_d
         4.  Potential issues or anomalies.
         """
         
-        app.logger.debug(f"Sending prompt to AI:\n{prompt_text[:999999999999999]}...") # Log first 500 chars
+        app.logger.debug("Sending AI analysis prompt (truncated): %s", prompt_text[:1200])
 
-        # Call Gemini API
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            return jsonify({'status': 'error', 'message': 'GEMINI_API_KEY is not set on the server.'}), 500
-        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "X-goog-api-key": api_key
-        }
-        
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt_text}]
-                }
-            ]
-        }
-        
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
+        ai_analysis = call_gemini_text(prompt_text, max_output_tokens=2048)
+        app.logger.info(f"AI analysis successfully generated for admin '{session['username']}'.")
+        return jsonify({
+            'status': 'success',
+            'ai_analysis': ai_analysis,
+            'message': 'AI analysis generated successfully.'
+        }), 200
 
-        ai_result = response.json()
-        if ai_result.get('candidates') and ai_result['candidates'][0].get('content') and ai_result['candidates'][0]['content'].get('parts'): 
-            ai_analysis = ai_result['candidates'][0]['content']['parts'][0]['text']
-            app.logger.info(f"AI analysis successfully generated for admin '{session['username']}'.")
-            return jsonify({
-                'status': 'success',
-                'ai_analysis': ai_analysis,
-                'message': 'AI analysis generated successfully.'
-            }), 200
-        else:
-            app.logger.error(f"AI response structure unexpected or missing content for AI analysis: {ai_result}")
-            return jsonify({'status': 'error', 'message': 'Failed to get AI analysis: Unexpected AI response format.'}), 500
-
-    except requests.exceptions.RequestException as req_e:
-        app.logger.error(f"HTTP request to AI API failed for AI analysis from admin '{session['username']}': {str(req_e)}", exc_info=True)
-        return jsonify({'status': 'error', 'message': f'Failed to get AI analysis: Network or API error. Details: {str(req_e)}'}), 500
+    except RuntimeError as e:
+        app.logger.error(f"AI analysis failed for admin '{session['username']}': {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     except Exception as e:
         app.logger.error(f"Failed to perform AI analysis for admin '{session['username']}': {str(e)}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Failed to get AI analysis due to an internal server error.'}), 500
@@ -1894,16 +1991,15 @@ def ask_ai_question(client, db, loom_collection, users_collection, warp_data_col
 
     try:
         # Re-fetch records using the stored query
-        records = list(loom_collection.find({}, {"_id": 0}))
+        cursor = loom_collection.find(last_ai_analysis_query, {"_id": 0}).sort("date", -1).limit(AI_MAX_RECORDS_FOLLOWUP)
+        records = list(cursor)
 
         if not records:
             return jsonify({'status': 'info', 'message': 'No data found for the original criteria to answer the question.'}), 200
 
-        # Prepare detailed records for AI, again respecting the limit
+        # Prepare detailed records for AI.
         detailed_records_for_ai = []
         for i, record in enumerate(records):
-            if i >= MAX_DETAILED_RECORDS_FOR_AI:
-                break
             processed_record = convert_datetimes_to_iso(record.copy())
             detailed_records_for_ai.append(processed_record)
 
@@ -1914,49 +2010,26 @@ def ask_ai_question(client, db, loom_collection, users_collection, warp_data_col
         Overall Summary:
         {json.dumps(last_report_summary, indent=2)}
 
-        Sample Detailed Records (up to {MAX_DETAILED_RECORDS_FOR_AI} records):
+        Sample Detailed Records (up to {AI_MAX_RECORDS_FOLLOWUP} records):
         {json.dumps(detailed_records_for_ai, indent=2)}
 
         Based on this information and your previous analysis, please answer the following question:
         "{user_question}"
         """
 
-        app.logger.debug(f"Sending follow-up prompt to AI:\n{follow_up_prompt_text[:500]}...")
+        app.logger.debug("Sending AI follow-up prompt (truncated): %s", follow_up_prompt_text[:1200])
 
-        # Call Gemini API
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            return jsonify({'status': 'error', 'message': 'GEMINI_API_KEY is not set on the server.'}), 500
-        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-        
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": follow_up_prompt_text}]}]
-        }
+        ai_answer = call_gemini_text(follow_up_prompt_text, max_output_tokens=1024)
+        app.logger.info(f"AI successfully answered follow-up question for admin '{session['username']}'.")
+        return jsonify({
+            'status': 'success',
+            'ai_answer': ai_answer,
+            'message': 'AI answered successfully.'
+        }), 200
 
-        headers = {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': api_key,
-        }
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status() 
-        
-        ai_result = response.json()
-
-        if ai_result.get('candidates') and ai_result['candidates'][0].get('content') and ai_result['candidates'][0]['content'].get('parts'): 
-            ai_answer = ai_result['candidates'][0]['content']['parts'][0]['text']
-            app.logger.info(f"AI successfully answered follow-up question for admin '{session['username']}'.")
-            return jsonify({
-                'status': 'success',
-                'ai_answer': ai_answer,
-                'message': 'AI answered successfully.'
-            }), 200
-        else:
-            app.logger.error(f"AI response structure unexpected or missing content for follow-up: {ai_result}")
-            return jsonify({'status': 'error', 'message': 'Failed to get AI answer: Unexpected AI response format.'}), 500
-
-    except requests.exceptions.RequestException as req_e:
-        app.logger.error(f"HTTP request to AI API failed for follow-up question from admin '{session['username']}': {str(req_e)}", exc_info=True)
-        return jsonify({'status': 'error', 'message': f'Failed to get AI answer: Network or API error. Details: {str(req_e)}'}), 500
+    except RuntimeError as e:
+        app.logger.error(f"AI follow-up failed for admin '{session['username']}': {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     except Exception as e:
         app.logger.error(f"Failed to answer follow-up question for admin '{session['username']}': {str(e)}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Failed to get AI answer due to an internal server error.'}), 500
@@ -1974,42 +2047,17 @@ def suggest_loomer_name():
     prompt_text = "Suggest a single, common, and appropriate name for a person who operates a powerloom machine. The name should be short and suitable for a username."
 
     try:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            return jsonify({'status': 'error', 'message': 'GEMINI_API_KEY is not set on the server.'}), 500
-        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-        
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
-            "generationConfig": {
-                "responseMimeType": "text/plain" # Expect plain text response
-            }
-        }
+        suggested_name = call_gemini_text(prompt_text, temperature=0.8, max_output_tokens=32).strip()
+        app.logger.info(f"AI successfully suggested loomer name: '{suggested_name}'.")
+        return jsonify({
+            'status': 'success',
+            'suggested_name': suggested_name,
+            'message': 'Loomer name suggested successfully.'
+        }), 200
 
-        headers = {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': api_key,
-        }
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status() 
-        
-        ai_result = response.json()
-        
-        if ai_result.get('candidates') and ai_result['candidates'][0].get('content') and ai_result['candidates'][0]['content'].get('parts'):
-            suggested_name = ai_result['candidates'][0]['content']['parts'][0]['text'].strip()
-            app.logger.info(f"AI successfully suggested loomer name: '{suggested_name}'.")
-            return jsonify({
-                'status': 'success',
-                'suggested_name': suggested_name,
-                'message': 'Loomer name suggested successfully.'
-            }), 200
-        else:
-            app.logger.error(f"AI response structure unexpected or missing content for name suggestion: {ai_result}")
-            return jsonify({'status': 'error', 'message': 'Failed to get AI name suggestion: Unexpected AI response format.'}), 500
-
-    except requests.exceptions.RequestException as req_e:
-        app.logger.error(f"HTTP request to AI API failed for name suggestion from admin '{session['username']}': {str(req_e)}", exc_info=True)
-        return jsonify({'status': 'error', 'message': f'Failed to get AI name suggestion: Network or API error. Details: {str(req_e)}'}), 500
+    except RuntimeError as e:
+        app.logger.error(f"AI name suggestion failed for admin '{session['username']}': {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     except Exception as e:
         app.logger.error(f"Failed to perform AI name suggestion for admin '{session['username']}': {str(e)}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Failed to get AI name suggestion due to an internal server error.'}), 500

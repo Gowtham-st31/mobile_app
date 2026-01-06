@@ -225,6 +225,74 @@ class ApiClient {
     }
   }
 
+  Future<String> analyzeReportWithAi({
+    required String loomerName,
+    required String shift,
+    required String loomNumber,
+    required String fromDateYYYYMMDD,
+    required String toDateYYYYMMDD,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/analyze_report_with_ai',
+        data: FormData.fromMap({
+          'loomer_name': loomerName,
+          'shift': shift,
+          'loom_number': loomNumber,
+          'from_date': fromDateYYYYMMDD,
+          'to_date': toDateYYYYMMDD,
+        }),
+      );
+
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] == 'success' && data['ai_analysis'] != null) {
+        return data['ai_analysis'].toString();
+      }
+      if (data['status'] == 'info') {
+        throw ApiException((data['message'] ?? 'No data found for AI analysis').toString(), statusCode: response.statusCode);
+      }
+      throw ApiException((data['message'] ?? 'Failed to generate AI analysis').toString(), statusCode: response.statusCode);
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to generate AI analysis';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
+  Future<String> askAiQuestion({required String question}) async {
+    try {
+      final response = await _dio.post(
+        '/analyze_report_with_ai/ask_question',
+        data: FormData.fromMap({'question': question}),
+      );
+
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] == 'success' && data['ai_answer'] != null) {
+        return data['ai_answer'].toString();
+      }
+      if (data['status'] == 'info') {
+        throw ApiException((data['message'] ?? 'No data found to answer').toString(), statusCode: response.statusCode);
+      }
+      throw ApiException((data['message'] ?? 'Failed to get AI answer').toString(), statusCode: response.statusCode);
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to get AI answer';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
+  Future<String> suggestLoomerName() async {
+    try {
+      final response = await _dio.post('/admin/suggest_loomer_name');
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] == 'success' && data['suggested_name'] != null) {
+        return data['suggested_name'].toString();
+      }
+      throw ApiException((data['message'] ?? 'Failed to suggest name').toString(), statusCode: response.statusCode);
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to suggest name';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
   Future<GraphData> getGraphData({
     required String loomerName,
     required String period,
