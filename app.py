@@ -185,6 +185,7 @@ def _parse_loom_numbers(raw: str | None) -> list[str] | None:
     - "all" (or empty) -> None
     - "1" -> ["1"]
     - "1,2,3,4" / "1 2 3" -> ["1","2","3","4"]
+    - "1-12" -> ["1","2",...,"12"]
     """
     if raw is None:
         return None
@@ -192,12 +193,28 @@ def _parse_loom_numbers(raw: str | None) -> list[str] | None:
     if not value or value == "all":
         return None
 
+    # Normalize ranges written with spaces (e.g. "1 - 12" -> "1-12").
+    value = re.sub(r"\s*-\s*", "-", value)
+
     tokens = [t.strip() for t in re.split(r"[\s,]+", value) if t and t.strip()]
     if not tokens:
         return None
     if "all" in tokens:
         return None
-    return tokens
+
+    expanded: list[str] = []
+    for token in tokens:
+        m = re.fullmatch(r"(\d+)-(\d+)", token)
+        if m:
+            a = int(m.group(1))
+            b = int(m.group(2))
+            start = min(a, b)
+            end = max(a, b)
+            expanded.extend([str(n) for n in range(start, end + 1)])
+        else:
+            expanded.append(token)
+
+    return expanded
 
 
 @app.get("/api/mobile/android/latest")
