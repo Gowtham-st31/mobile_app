@@ -87,9 +87,10 @@ class _HomeShellState extends State<HomeShell> {
 
       final messenger = ScaffoldMessenger.of(context);
       messenger.clearMaterialBanners();
+      const updateNotes = 'New feature: Upload or record video to auto-detect loom number and meter values before data entry.';
       messenger.showMaterialBanner(
         MaterialBanner(
-          content: Text('Update available: v${latest.versionName.isEmpty ? latest.versionCode : latest.versionName}.\nPlease download and install the latest version.'),
+          content: Text('Update available: v${latest.versionName.isEmpty ? latest.versionCode : latest.versionName}.\n$updateNotes'),
           actions: [
             TextButton(
               onPressed: () async {

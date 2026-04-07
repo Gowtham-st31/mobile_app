@@ -250,7 +250,7 @@
                                     <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                         <span class="text-gray-500 font-bold sm:text-sm">₹</span>
                                     </div>
-                                    <input type="number" name="salary_per_meter" min="0" step="0.01" required 
+                                    <input type="number" name="salary_per_meter" id="data_salary_per_meter" min="0" step="0.01" required
                                         class="w-full pl-7 px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium placeholder-gray-400">
                                 </div>
                             </div>
@@ -262,10 +262,117 @@
                             </div>
                         </div>
 
-                        <div class="pt-4">
+                        <div class="pt-4 flex flex-col md:flex-row md:items-center gap-4">
                             <button type="submit" id="submitDataBtn" class="w-full md:w-auto md:min-w-[200px] btn-primary py-3.5 px-8 rounded-xl font-bold shadow-lg flex items-center justify-center text-lg tracking-wide">
                                 <span id="submitDataBtnText">Submit Data</span>
                                 <span id="submitDataSpinner" class="spinner hidden ml-2"></span>
+                            </button>
+                            <button type="button" id="upload-video-btn" onclick="window.location.href='/upload-video-data'" class="w-full md:w-auto md:min-w-[260px] btn-secondary py-3.5 px-8 rounded-xl font-bold shadow-sm flex items-center justify-center text-lg tracking-wide">
+                                Upload Data with Video
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Section: Upload Data with Video -->
+            <section id="uploadVideoDataSection" class="main-content-section glass-card mb-8 hidden animate-slide-up">
+                <div class="p-4 sm:p-6 border-b border-white/20 bg-white/30 backdrop-blur-sm section-header">
+                    <h2 class="text-2xl font-bold text-gradient">Upload Data with Video</h2>
+                    <p class="text-sm text-gray-600 mt-1 font-medium">Auto-detect loom number and meters from uploaded video.</p>
+                </div>
+                <div class="p-4 sm:p-6">
+                    <form id="videoDataEntryForm" class="space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="form-group">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Loomer Name</label>
+                                <input type="text" name="loomer_name" id="video_data_loomer_name" required
+                                    class="w-full px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium placeholder-gray-400">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Loom Number (Auto Detected)</label>
+                                <input type="text" name="loom_number" id="loom_number" required
+                                    class="w-full px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium placeholder-gray-400">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Shift</label>
+                                <select name="shift" id="video_shift" required
+                                        class="w-full px-4 py-3 modern-input modern-select rounded-xl outline-none cursor-pointer text-gray-800 font-medium appearance-none">
+                                    <option value="">Select Shift</option>
+                                    <option value="Morning">Morning</option>
+                                    <option value="Night">Night</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Meters (Auto Detected)</label>
+                                <input type="number" name="meters" id="meters" required
+                                    class="w-full px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium placeholder-gray-400">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Salary per Meter</label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                        <span class="text-gray-500 font-bold sm:text-sm">₹</span>
+                                    </div>
+                                    <input type="number" name="salary_per_meter" id="video_salary_per_meter" min="0" step="0.01" required
+                                        class="w-full pl-7 px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium placeholder-gray-400">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Date</label>
+                                <input type="date" name="date" id="video_data_date" required max="2100-12-31" min="2000-01-01"
+                                    class="w-full px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                            <div class="form-group md:col-span-2">
+                                <label class="block text-sm font-bold text-gray-700 mb-2">Upload Video</label>
+                                <input type="file" id="video_file" name="video" accept="video/*"
+                                    class="w-full px-4 py-3 modern-input rounded-xl outline-none text-gray-800 font-medium file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-600/20 file:text-green-100 hover:file:bg-green-600/30">
+                            </div>
+                            <div>
+                                <button type="button" id="detect-btn" class="w-full btn-secondary py-3.5 px-6 rounded-xl font-bold shadow-sm flex items-center justify-center text-base tracking-wide">
+                                    <span id="detect-btnText">Auto Detect from Video</span>
+                                    <span id="detect-btnSpinner" class="spinner hidden ml-2"></span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="bg-white/20 backdrop-blur-sm border border-white/20 rounded-2xl p-4 sm:p-5 space-y-4">
+                            <h3 class="text-lg font-bold text-gray-800">Record Video</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <button type="button" id="start-recording-btn" class="btn-primary py-2.5 px-4 rounded-xl font-bold text-sm">Start Recording</button>
+                                <button type="button" id="pause-recording-btn" class="btn-secondary py-2.5 px-4 rounded-xl font-bold text-sm" disabled>Pause</button>
+                                <button type="button" id="resume-recording-btn" class="btn-secondary py-2.5 px-4 rounded-xl font-bold text-sm" disabled>Resume</button>
+                                <button type="button" id="stop-recording-btn" class="btn-secondary py-2.5 px-4 rounded-xl font-bold text-sm" disabled>Stop</button>
+                            </div>
+
+                            <video id="camera-preview" class="hidden w-full rounded-xl border border-white/20" autoplay muted playsinline></video>
+                            <video id="recorded-video-preview" class="hidden w-full rounded-xl border border-white/20" controls playsinline></video>
+                            <p class="text-xs text-gray-500 font-medium">You can upload a file or record directly from camera, then click Auto Detect from Video.</p>
+                        </div>
+
+                        <div id="detectedRowsContainer" class="hidden bg-white/30 backdrop-blur-sm border border-white/20 rounded-2xl p-4 sm:p-5">
+                            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                                <h3 class="text-lg font-bold text-gray-800">Detected Loom Rows</h3>
+                                <p id="detectedRowsMeta" class="text-sm font-medium text-gray-600"></p>
+                            </div>
+                            <div id="detectedRowsTable" class="overflow-x-auto rounded-xl border border-white/30"></div>
+                        </div>
+
+                        <div class="pt-2 flex flex-col md:flex-row gap-4">
+                            <button type="submit" id="submitVideoDataBtn" class="w-full md:w-auto md:min-w-[220px] btn-primary py-3.5 px-8 rounded-xl font-bold shadow-lg flex items-center justify-center text-lg tracking-wide">
+                                <span id="submitVideoDataBtnText">Submit Data</span>
+                                <span id="submitVideoDataBtnSpinner" class="spinner hidden ml-2"></span>
+                            </button>
+                            <button type="button" onclick="window.location.href='/enter-data'" class="w-full md:w-auto md:min-w-[180px] btn-secondary py-3.5 px-8 rounded-xl font-bold shadow-sm">
+                                Back to Enter Data
                             </button>
                         </div>
                     </form>
@@ -819,6 +926,12 @@
         let productionChartInstance = null; // To store the Chart.js instance
         let lastReportData = null; // To store the last fetched report data for PDF generation
         let currentWarpValue = 0; // Global variable to store current total warp
+        let detectedVideoRows = []; // Stores bulk detected rows from upload-video flow
+        let mediaRecorder = null;
+        let recordingStream = null;
+        let recordedChunks = [];
+        let recordedVideoBlob = null;
+        let recordedVideoUrl = null;
 
         const notifications = {
             dataAddedSuccess: "Data added successfully!",
@@ -872,7 +985,11 @@
             aiSuggestionGenerated: "AI loomer name suggested successfully!", // New
             failedToGenerateAiSuggestion: "Failed to generate AI loomer name suggestion.", // New
             aiQuestionAnswered: "AI answered your question!", // New
-            failedToAnswerAiQuestion: "Failed to get AI answer." // New
+            failedToAnswerAiQuestion: "Failed to get AI answer.", // New
+            videoDetectSuccess: "Video data detected successfully!",
+            videoDetectFailed: "Failed to detect data from video.",
+            videoFileRequired: "Please upload or record a video first.",
+            shiftRequiredForDetect: "Please select shift before video detection."
         };
 
         function showNotification(messageKey, type = 'success', params = {}) {
@@ -934,7 +1051,7 @@
          */
         function showSection(sectionId) {
             console.log(`Activating section: ${sectionId}`); // Log for debugging
-            const sections = ['dataEntrySection', 'reportSection', 'graphsSection', 'adminSection', 'profileSection']; 
+            const sections = ['dataEntrySection', 'uploadVideoDataSection', 'reportSection', 'graphsSection', 'adminSection', 'profileSection']; 
 
             sections.forEach(id => {
                 const section = document.getElementById(id);
@@ -1110,6 +1227,7 @@
                 const reportLoomerNameInput = document.getElementById('report_loomer_name'); // New ID
                 const loomerNameReportHint = document.getElementById('loomerNameReportHint');
                 const graphLoomerNameInput = document.getElementById('graph_loomer_name'); // New ID
+                const videoLoomerNameInput = document.getElementById('video_data_loomer_name');
                 const analyzeReportBtn = document.getElementById('analyzeReportBtn'); // New button
 
                 let initialSection = 'reportSection'; // Default for loomers
@@ -1123,6 +1241,11 @@
                     
                     dataLoomerNameInput.readOnly = false;
                     dataLoomerNameInput.value = ''; 
+
+                    if (videoLoomerNameInput) {
+                        videoLoomerNameInput.readOnly = false;
+                        videoLoomerNameInput.value = '';
+                    }
 
                     reportLoomerNameInput.readOnly = false;
                     reportLoomerNameInput.value = 'all'; 
@@ -1145,6 +1268,11 @@
                     dataLoomerNameInput.value = username; 
                     dataLoomerNameInput.readOnly = true; 
 
+                    if (videoLoomerNameInput) {
+                        videoLoomerNameInput.value = username;
+                        videoLoomerNameInput.readOnly = true;
+                    }
+
                     reportLoomerNameInput.value = username; 
                     reportLoomerNameInput.readOnly = true; 
                     loomerNameReportHint.classList.add('hidden'); 
@@ -1159,6 +1287,8 @@
                 // Ensure IDs are correct for these inputs
                 const dataDateInput = document.getElementById('data_date'); 
                 if (dataDateInput) dataDateInput.value = today;
+                const videoDateInput = document.getElementById('video_data_date');
+                if (videoDateInput) videoDateInput.value = today;
                 const reportFromDateInput = document.getElementById('report_from_date');
                 const reportToDateInput = document.getElementById('report_to_date');
                 if (reportFromDateInput) reportFromDateInput.value = today;
@@ -1486,6 +1616,456 @@
                 toggleSpinner('submitDataBtn', false); // Spinner hides
             }
         });
+
+        function setRecordingButtonsState(state) {
+            const startBtn = document.getElementById('start-recording-btn');
+            const pauseBtn = document.getElementById('pause-recording-btn');
+            const resumeBtn = document.getElementById('resume-recording-btn');
+            const stopBtn = document.getElementById('stop-recording-btn');
+            if (!startBtn || !pauseBtn || !resumeBtn || !stopBtn) return;
+
+            if (state === 'recording') {
+                startBtn.disabled = true;
+                pauseBtn.disabled = false;
+                resumeBtn.disabled = true;
+                stopBtn.disabled = false;
+                return;
+            }
+
+            if (state === 'paused') {
+                startBtn.disabled = true;
+                pauseBtn.disabled = true;
+                resumeBtn.disabled = false;
+                stopBtn.disabled = false;
+                return;
+            }
+
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+            resumeBtn.disabled = true;
+            stopBtn.disabled = true;
+        }
+
+        function stopRecordingStream() {
+            if (recordingStream) {
+                recordingStream.getTracks().forEach(track => track.stop());
+                recordingStream = null;
+            }
+        }
+
+        function collectDetectedRowsFromTable() {
+            const rows = [];
+            const rowNodes = document.querySelectorAll('#detectedRowsTable tbody tr');
+
+            rowNodes.forEach((tr) => {
+                const loomInput = tr.querySelector('input[data-field="loom_number"]');
+                const metersInput = tr.querySelector('input[data-field="meters"]');
+                const loomNumber = loomInput ? loomInput.value.trim() : '';
+                const metersValue = metersInput ? metersInput.value.trim() : '';
+
+                if (!loomNumber || metersValue === '') {
+                    return;
+                }
+
+                rows.push({
+                    loom_number: loomNumber,
+                    meters: Number(metersValue),
+                });
+            });
+
+            if (rows.length > 0) {
+                const topLoom = document.getElementById('loom_number').value.trim();
+                const topMeters = document.getElementById('meters').value.trim();
+                if (topLoom) {
+                    rows[0].loom_number = topLoom;
+                }
+                if (topMeters !== '') {
+                    rows[0].meters = Number(topMeters);
+                }
+            }
+
+            return rows;
+        }
+
+        function renderDetectedRowsTable(rows) {
+            const detectedRowsContainer = document.getElementById('detectedRowsContainer');
+            const detectedRowsMeta = document.getElementById('detectedRowsMeta');
+            const detectedRowsTable = document.getElementById('detectedRowsTable');
+
+            if (!detectedRowsTable || !detectedRowsContainer) {
+                return;
+            }
+
+            detectedRowsTable.innerHTML = '';
+
+            const table = document.createElement('table');
+            table.className = 'min-w-full divide-y divide-white/20 dark-table';
+
+            const thead = document.createElement('thead');
+            const headRow = document.createElement('tr');
+            ['#', 'Loom Number', 'Meters'].forEach(label => {
+                const th = document.createElement('th');
+                th.className = 'px-4 py-3 text-left text-xs font-bold uppercase tracking-wider';
+                th.textContent = label;
+                headRow.appendChild(th);
+            });
+            thead.appendChild(headRow);
+
+            const tbody = document.createElement('tbody');
+            tbody.className = 'divide-y divide-white/10';
+
+            rows.forEach((row, index) => {
+                const tr = document.createElement('tr');
+
+                const indexCell = document.createElement('td');
+                indexCell.className = 'px-4 py-2.5 text-sm font-medium';
+                indexCell.textContent = String(index + 1);
+                tr.appendChild(indexCell);
+
+                const loomCell = document.createElement('td');
+                loomCell.className = 'px-4 py-2.5';
+                const loomInput = document.createElement('input');
+                loomInput.type = 'text';
+                loomInput.value = String(row.loom_number ?? '');
+                loomInput.dataset.field = 'loom_number';
+                loomInput.className = 'w-full px-3 py-2 modern-input rounded-lg outline-none text-sm font-medium';
+                loomCell.appendChild(loomInput);
+                tr.appendChild(loomCell);
+
+                const metersCell = document.createElement('td');
+                metersCell.className = 'px-4 py-2.5';
+                const metersInput = document.createElement('input');
+                metersInput.type = 'number';
+                metersInput.min = '0';
+                metersInput.value = String(row.meters ?? '');
+                metersInput.dataset.field = 'meters';
+                metersInput.className = 'w-full px-3 py-2 modern-input rounded-lg outline-none text-sm font-medium';
+                metersCell.appendChild(metersInput);
+                tr.appendChild(metersCell);
+
+                if (index === 0) {
+                    loomInput.addEventListener('input', () => {
+                        document.getElementById('loom_number').value = loomInput.value;
+                    });
+                    metersInput.addEventListener('input', () => {
+                        document.getElementById('meters').value = metersInput.value;
+                    });
+                }
+
+                tbody.appendChild(tr);
+            });
+
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            detectedRowsTable.appendChild(table);
+
+            if (detectedRowsMeta) {
+                detectedRowsMeta.textContent = `${rows.length} rows detected. Review/edit and click Submit Data.`;
+            }
+            detectedRowsContainer.classList.remove('hidden');
+        }
+
+        setRecordingButtonsState('idle');
+
+        const videoFileInput = document.getElementById('video_file');
+        if (videoFileInput) {
+            videoFileInput.addEventListener('change', () => {
+                if (videoFileInput.files && videoFileInput.files.length > 0) {
+                    recordedVideoBlob = null;
+                    if (recordedVideoUrl) {
+                        URL.revokeObjectURL(recordedVideoUrl);
+                        recordedVideoUrl = null;
+                    }
+                    const recordedPreview = document.getElementById('recorded-video-preview');
+                    if (recordedPreview) {
+                        recordedPreview.classList.add('hidden');
+                        recordedPreview.removeAttribute('src');
+                        recordedPreview.load();
+                    }
+                }
+            });
+        }
+
+        const startRecordingBtn = document.getElementById('start-recording-btn');
+        if (startRecordingBtn) {
+            startRecordingBtn.addEventListener('click', async () => {
+                try {
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+                        showNotification('Camera recording is not supported in this browser.', 'error');
+                        return;
+                    }
+
+                    stopRecordingStream();
+                    recordingStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+                    const cameraPreview = document.getElementById('camera-preview');
+                    if (cameraPreview) {
+                        cameraPreview.srcObject = recordingStream;
+                        cameraPreview.classList.remove('hidden');
+                    }
+
+                    if (recordedVideoUrl) {
+                        URL.revokeObjectURL(recordedVideoUrl);
+                        recordedVideoUrl = null;
+                    }
+
+                    const recordedPreview = document.getElementById('recorded-video-preview');
+                    if (recordedPreview) {
+                        recordedPreview.classList.add('hidden');
+                        recordedPreview.removeAttribute('src');
+                        recordedPreview.load();
+                    }
+
+                    if (videoFileInput) {
+                        videoFileInput.value = '';
+                    }
+
+                    recordedChunks = [];
+                    recordedVideoBlob = null;
+
+                    const options = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+                        ? { mimeType: 'video/webm;codecs=vp9' }
+                        : {};
+
+                    mediaRecorder = new MediaRecorder(recordingStream, options);
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data && event.data.size > 0) {
+                            recordedChunks.push(event.data);
+                        }
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        recordedVideoBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
+
+                        const previewEl = document.getElementById('recorded-video-preview');
+                        if (previewEl) {
+                            recordedVideoUrl = URL.createObjectURL(recordedVideoBlob);
+                            previewEl.src = recordedVideoUrl;
+                            previewEl.classList.remove('hidden');
+                        }
+
+                        const cameraEl = document.getElementById('camera-preview');
+                        if (cameraEl) {
+                            cameraEl.classList.add('hidden');
+                            cameraEl.srcObject = null;
+                        }
+
+                        stopRecordingStream();
+                        setRecordingButtonsState('idle');
+
+                        // Auto-upload recorded video for detection as soon as recording stops.
+                        runVideoDetection(true);
+                    };
+
+                    mediaRecorder.start(250);
+                    setRecordingButtonsState('recording');
+                    showNotification('Recording started.', 'info');
+                } catch (error) {
+                    console.error('Start recording error:', error);
+                    showNotification('Unable to start camera recording.', 'error');
+                    stopRecordingStream();
+                    setRecordingButtonsState('idle');
+                }
+            });
+        }
+
+        const pauseRecordingBtn = document.getElementById('pause-recording-btn');
+        if (pauseRecordingBtn) {
+            pauseRecordingBtn.addEventListener('click', () => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.pause();
+                    setRecordingButtonsState('paused');
+                    showNotification('Recording paused.', 'info');
+                }
+            });
+        }
+
+        const resumeRecordingBtn = document.getElementById('resume-recording-btn');
+        if (resumeRecordingBtn) {
+            resumeRecordingBtn.addEventListener('click', () => {
+                if (mediaRecorder && mediaRecorder.state === 'paused') {
+                    mediaRecorder.resume();
+                    setRecordingButtonsState('recording');
+                    showNotification('Recording resumed.', 'info');
+                }
+            });
+        }
+
+        const stopRecordingBtn = document.getElementById('stop-recording-btn');
+        if (stopRecordingBtn) {
+            stopRecordingBtn.addEventListener('click', () => {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                    showNotification('Recording stopped.', 'info');
+                } else {
+                    stopRecordingStream();
+                    setRecordingButtonsState('idle');
+                }
+            });
+        }
+
+        async function runVideoDetection(isAutoTriggered = false) {
+            toggleSpinner('detect-btn', true);
+            try {
+                const videoForm = document.getElementById('videoDataEntryForm');
+                const videoInput = document.getElementById('video_file');
+                const shiftInput = document.getElementById('video_shift');
+                const selectedFile = videoInput ? videoInput.files[0] : null;
+                const selectedVideo = selectedFile || recordedVideoBlob;
+                const detectFormData = videoForm ? new FormData(videoForm) : new FormData();
+                const selectedShift = String(detectFormData.get('shift') || (shiftInput ? shiftInput.value : '') || '').trim();
+
+                if (!selectedVideo) {
+                    if (!isAutoTriggered) {
+                        showNotification('videoFileRequired', 'error');
+                    }
+                    return;
+                }
+
+                if (!selectedShift) {
+                    showNotification('shiftRequiredForDetect', 'error');
+                    return;
+                }
+
+                if (selectedFile) {
+                    detectFormData.set('video', selectedFile);
+                    detectFormData.set('video_file', selectedFile);
+                } else {
+                    detectFormData.set('video', selectedVideo, 'recorded_video.webm');
+                    detectFormData.set('video_file', selectedVideo, 'recorded_video.webm');
+                }
+                detectFormData.set('shift', selectedShift);
+
+                const response = await fetch('/detect-video-data', {
+                    method: 'POST',
+                    body: detectFormData,
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    showNotification('sessionExpired', 'error');
+                    setTimeout(() => window.location.href = '/login', 1500);
+                    return;
+                }
+
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') {
+                    showNotification(data.message || 'videoDetectFailed', 'error');
+                    return;
+                }
+
+                const rows = Array.isArray(data.rows) ? data.rows : [];
+                if (!rows.length) {
+                    showNotification('videoDetectFailed', 'error');
+                    return;
+                }
+
+                detectedVideoRows = rows;
+
+                document.getElementById('loom_number').value = rows[0].loom_number || '';
+                document.getElementById('meters').value = rows[0].meters ?? '';
+
+                renderDetectedRowsTable(rows);
+                showNotification('videoDetectSuccess', 'success');
+            } catch (error) {
+                console.error('Video detect error:', error);
+                showNotification('networkError', 'error');
+            } finally {
+                toggleSpinner('detect-btn', false);
+            }
+        }
+
+        const detectButton = document.getElementById('detect-btn');
+        if (detectButton) {
+            detectButton.addEventListener('click', async () => {
+                await runVideoDetection(false);
+            });
+        }
+
+        const videoDataEntryForm = document.getElementById('videoDataEntryForm');
+        if (videoDataEntryForm) {
+            videoDataEntryForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                toggleSpinner('submitVideoDataBtn', true);
+
+                try {
+                    const formData = new FormData(e.target);
+                    const requiredFields = ["loomer_name", "shift", "salary_per_meter", "date"];
+                    const missingFields = requiredFields.filter(field => {
+                        const value = formData.get(field);
+                        return value === null || String(value).trim() === '';
+                    });
+
+                    if (missingFields.length > 0) {
+                        showNotification('missingRequiredFields', 'error', { fields: missingFields.join(', ') });
+                        return;
+                    }
+
+                    let response;
+                    let rowsToSubmit = [];
+
+                    if (detectedVideoRows.length > 0) {
+                        rowsToSubmit = collectDetectedRowsFromTable();
+                        if (!rowsToSubmit.length) {
+                            showNotification('videoDetectFailed', 'error');
+                            return;
+                        }
+
+                        response = await fetch('/add_video_form_bulk', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                loomer_name: String(formData.get('loomer_name') || '').trim(),
+                                shift: String(formData.get('shift') || '').trim(),
+                                salary_per_meter: String(formData.get('salary_per_meter') || '').trim(),
+                                date: String(formData.get('date') || '').trim(),
+                                rows: rowsToSubmit,
+                            }),
+                        });
+                    } else {
+                        const singleRequired = ["loom_number", "meters"];
+                        const singleMissing = singleRequired.filter(field => {
+                            const value = formData.get(field);
+                            return value === null || String(value).trim() === '';
+                        });
+                        if (singleMissing.length > 0) {
+                            showNotification('missingRequiredFields', 'error', { fields: singleMissing.join(', ') });
+                            return;
+                        }
+
+                        response = await fetch('/add_form', {
+                            method: 'POST',
+                            body: formData
+                        });
+                    }
+
+                    if (response.status === 401 || response.status === 403) {
+                        showNotification('sessionExpired', 'error');
+                        setTimeout(() => window.location.href = '/login', 1500);
+                        return;
+                    }
+
+                    const data = await response.json();
+                    if (!response.ok || data.status !== 'success') {
+                        showNotification(data.message || 'failedToAddData', 'error');
+                        return;
+                    }
+
+                    showNotification('dataAddedSuccess', 'success');
+                    if (detectedVideoRows.length > 0) {
+                        const detectedRowsMeta = document.getElementById('detectedRowsMeta');
+                        if (detectedRowsMeta) {
+                            detectedRowsMeta.textContent = `${data.inserted_count || 0} rows saved to database.`;
+                        }
+                        detectedVideoRows = [];
+                    }
+                } catch (error) {
+                    console.error('Video form submit error:', error);
+                    showNotification('networkError', 'error');
+                } finally {
+                    toggleSpinner('submitVideoDataBtn', false);
+                }
+            });
+        }
 
         // Function to apply color based on meters
         function applyMeterColor(metersValue, element) {

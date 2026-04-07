@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
 import '../models/session.dart';
+import 'upload_video_data_screen.dart';
 
 class EnterDataScreen extends StatefulWidget {
   final AppController controller;
@@ -156,6 +157,23 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
               child: _submitting
                   ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Text('Submit Data'),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _submitting
+                  ? null
+                  : () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => UploadVideoDataScreen(
+                            controller: widget.controller,
+                            session: widget.session,
+                          ),
+                        ),
+                      );
+                    },
+              icon: const Icon(Icons.video_call),
+              label: const Text('Upload Data with Video'),
             ),
           ],
         ),

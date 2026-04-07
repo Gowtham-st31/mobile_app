@@ -39,6 +39,7 @@ import json
 from datetime import datetime, timedelta, timezone # Import UTC for timezone-aware datetimes
 import time
 import re
+import tempfile
 import pytz
 import os.path
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, send_from_directory
@@ -568,6 +569,367 @@ def call_gemini_text(
         return text
 
 
+round_tracker = {}
+
+
+def custom_shift_round(value_str, day_label, shift_label):
+    value = float(value_str)
+    whole = int(value)
+    decimal = value - whole
+
+    key = f"{day_label}_{shift_label}"
+
+    if decimal > 0.5:
+        return whole + 1
+
+    elif decimal < 0.5:
+        return whole
+
+    else:
+        # alternate .5 rounding
+        if key not in round_tracker:
+            round_tracker[key] = False   # first .5 -> round down
+
+        if round_tracker[key]:
+            result = whole + 1
+        else:
+            result = whole
+
+        round_tracker[key] = not round_tracker[key]
+        return result
+
+
+def extract_loom_data_from_video(video_path: str) -> list[dict]:
+    import cv2
+    import json
+    import re
+    import time
+    import os
+    from google import genai
+
+    global round_tracker
+    round_tracker = {}
+
+    # ===== CONFIG =====
+    API_KEY = "AIzaSyD8tJucKTpkTYpapSh-F0JgRJxUldw7YyI"
+    VIDEO_PATH = video_path
+    FRAME_SKIP = 20
+    MAX_RETRIES = 3
+
+    client = genai.Client(api_key=API_KEY)
+
+    cap = cv2.VideoCapture(VIDEO_PATH)
+
+    if not cap.isOpened():
+        print("Cannot open video file")
+        raise RuntimeError("Cannot open video file")
+
+    results = []
+    last_loom = None
+    frame_count = 0
+
+    prompt = """
+Read the industrial loom shift meter image.
+
+Extract ONLY:
+1. loom number
+2. current day shift meter
+3. previous night shift meter
+
+Return ONLY JSON.
+
+Example:
+{
+  "loom": "008",
+  "Tuesday_Day": "0031.6",
+  "Monday_Ngt": "0000.0"
+}
+
+Read the day labels exactly as shown in image.
+No explanation.
+No markdown.
+Only JSON.
+"""
+
+    print("Started processing...\n")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_count += 1
+
+        if frame_count % FRAME_SKIP != 0:
+            continue
+
+        print(f"\n{'='*50}")
+        print(f"PROCESSING FRAME: {frame_count}")
+        print(f"{'='*50}")
+
+        filename = f"frame_{frame_count}.jpg"
+        cv2.imwrite(filename, frame)
+
+        with open(filename, "rb") as f:
+            image_bytes = f.read()
+
+        success = False
+        retry_count = 0
+
+        while not success and retry_count < MAX_RETRIES:
+            try:
+                print(f"Sending to model... (try {retry_count + 1})")
+
+                response = client.models.generate_content(
+                    model="gemma-3-4b-it",
+                    contents=[
+                        prompt,
+                        genai.types.Part.from_bytes(
+                            data=image_bytes,
+                            mime_type="image/jpeg"
+                        )
+                    ]
+                )
+
+                text = response.text.strip()
+
+                print("\nRAW OUTPUT:")
+                print("-" * 50)
+                print(text)
+                print("-" * 50)
+
+                match = re.search(r'\{.*?\}', text, re.DOTALL)
+
+                if not match:
+                    raise ValueError("No JSON found in output")
+
+                json_text = match.group(0)
+
+                print("\nJSON BLOCK:")
+                print(json_text)
+
+                raw_row = json.loads(json_text)
+
+                # ===== DYNAMIC JSON =====
+                row = {}
+
+                for key, value in raw_row.items():
+                    clean_key = key.strip()
+
+                    if clean_key.lower() == "loom":
+                        row["loom"] = value
+                    else:
+                        row[clean_key] = value
+
+                print("\nNORMALIZED JSON:")
+                print(row)
+
+                # ===== APPLY ROUNDING FOR ALL DAYS =====
+                for key in list(row.keys()):
+                    if key == "loom":
+                        continue
+
+                    if row[key] is None:
+                        continue
+
+                    parts = key.split("_")
+
+                    if len(parts) == 2:
+                        day_label = parts[0]
+                        shift_label = parts[1]
+
+                        row[key] = custom_shift_round(
+                            row[key],
+                            day_label,
+                            shift_label
+                        )
+
+                print("\nROUNDED JSON:")
+                print(row)
+
+                # ===== DUPLICATE CHECK =====
+                if row["loom"] != last_loom:
+                    row["frame"] = frame_count
+                    results.append(row)
+                    last_loom = row["loom"]
+
+                    print(f"\n✅ ADDED LOOM {row['loom']}")
+                else:
+                    print(f"\n⚠ DUPLICATE SKIPPED: {row['loom']}")
+
+                success = True
+
+            except Exception as e:
+                retry_count += 1
+                wait_time = retry_count * 10
+
+                print(f"\n❌ ERROR: {e}")
+                print(f"⏳ Waiting {wait_time} sec before retrying same frame {frame_count}...")
+                time.sleep(wait_time)
+
+        if not success:
+            print(f"\n⛔ FAILED FRAME {frame_count}")
+
+        time.sleep(1)
+
+        if os.path.exists(filename):
+            os.remove(filename)
+
+    cap.release()
+
+    print("\nFINAL OUTPUT")
+    print("=" * 50)
+    print(json.dumps(results, indent=4))
+
+    with open("unique_loom_output.json", "w") as f:
+        json.dump(results, f, indent=4)
+
+    print("\nSaved as unique_loom_output.json")
+    return results
+
+
+def _resolve_detected_meters(extracted_data: dict, selected_shift: str) -> int | None:
+    """Normalizes meters output when extractor returns shift-wise values."""
+    raw_meters = extracted_data.get("meters")
+
+    if isinstance(raw_meters, (int, float, str)):
+        try:
+            return int(round(float(raw_meters)))
+        except Exception:
+            return None
+
+    shift_key = (selected_shift or "").strip().lower()
+
+    if shift_key in {"morning", "day"}:
+        for k, v in extracted_data.items():
+            if str(k).strip().lower().endswith("_day"):
+                try:
+                    return int(round(float(v)))
+                except Exception:
+                    return None
+
+    if shift_key in {"night", "ngt"}:
+        for k, v in extracted_data.items():
+            if str(k).strip().lower().endswith("_ngt"):
+                try:
+                    return int(round(float(v)))
+                except Exception:
+                    return None
+
+    candidate_maps = []
+    if isinstance(raw_meters, dict):
+        candidate_maps.append(raw_meters)
+
+    for key in ("meters_by_shift", "shift_meters", "all_days", "shifts"):
+        value = extracted_data.get(key)
+        if isinstance(value, dict):
+            candidate_maps.append(value)
+
+    for mapping in candidate_maps:
+        for k, v in mapping.items():
+            if str(k).strip().lower() == shift_key:
+                try:
+                    return int(round(float(v)))
+                except Exception:
+                    return None
+
+    return None
+
+
+def _normalize_loom_number(raw_value) -> str:
+    text = str(raw_value).strip()
+    if not text:
+        return ""
+    try:
+        # Removes leading zeros from purely numeric loom values.
+        return str(int(text))
+    except Exception:
+        return text
+
+
+def _normalize_detected_rows(extracted_data: list, selected_shift: str) -> list[dict]:
+    """Normalize extracted frame rows into lightweight response rows."""
+    response_rows: list[dict] = []
+
+    for row in extracted_data:
+        if not isinstance(row, dict):
+            continue
+
+        loom_value = row.get("loom")
+        detected_meters = _resolve_detected_meters(row, selected_shift)
+        if loom_value is None or detected_meters is None:
+            continue
+
+        loom_number = _normalize_loom_number(loom_value)
+        if not loom_number:
+            continue
+
+        response_rows.append(
+            {
+                "loom_number": loom_number,
+                "meters": int(detected_meters),
+            }
+        )
+
+    return response_rows
+
+
+def _build_video_bulk_docs(
+    rows: list,
+    *,
+    loomer_name: str,
+    selected_shift: str,
+    salary_per_meter_raw: str,
+    date_raw: str,
+) -> list[dict]:
+    """Build MongoDB documents from user-edited detected rows."""
+    date_obj_naive_midnight = datetime.strptime(date_raw, "%Y-%m-%d")
+    parsed_date_utc = pytz.utc.localize(date_obj_naive_midnight).astimezone(pytz.utc)
+
+    salary_per_meter = float(salary_per_meter_raw)
+    if salary_per_meter < 0:
+        raise ValueError("salary_per_meter must be non-negative")
+
+    shift_normalized = selected_shift.strip().lower()
+    loomer_normalized = loomer_name.strip().lower()
+
+    docs_to_insert: list[dict] = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        loom_candidate = row.get("loom_number")
+        if loom_candidate is None:
+            loom_candidate = row.get("loom")
+
+        loom_number = _normalize_loom_number(loom_candidate)
+        if not loom_number:
+            continue
+
+        meters_candidate = row.get("meters")
+        if meters_candidate is None:
+            continue
+
+        meters_value = int(float(meters_candidate))
+        if meters_value < 0:
+            raise ValueError("meters must be non-negative")
+
+        docs_to_insert.append(
+            {
+                "loomer_name": loomer_normalized,
+                "loom_number": loom_number.lower(),
+                "shift": shift_normalized,
+                "meters": meters_value,
+                "salary_per_meter": salary_per_meter,
+                "date": parsed_date_utc,
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+
+    return docs_to_insert
+
+
 from pymongo import MongoClient
 
 def get_db_connection():
@@ -857,6 +1219,22 @@ def enter_data_page():
         username=session.get('username'),
         role=session.get('role'),
         initial_section="dataEntrySection",
+    )
+
+
+@app.route("/upload-video-data", methods=["GET"])
+def upload_video_data_page():
+    gate = _require_login_page()
+    if gate:
+        return gate
+    gate = _require_admin_page()
+    if gate:
+        return gate
+    return render_template(
+        "form.html",
+        username=session.get('username'),
+        role=session.get('role'),
+        initial_section="uploadVideoDataSection",
     )
 
 
@@ -1290,6 +1668,122 @@ def get_users(client, db, loom_collection, users_collection, warp_data_collectio
         return jsonify({'status': 'error', 'message': 'Failed to retrieve users due to an internal error.'}), 500
 
 # --- Loom Data Management ---
+
+@app.route('/detect-video-data', methods=['POST'])
+@login_required
+@admin_required
+def detect_video_data():
+    """Receives an uploaded video and returns detected rows for user review."""
+    video_file = request.files.get('video') or request.files.get('video_file')
+    selected_shift = (request.form.get('shift') or request.form.get('video_shift') or '').strip()
+
+    if not video_file or not video_file.filename:
+        return jsonify({'status': 'error', 'message': 'video file is required.'}), 400
+
+    if not selected_shift:
+        return jsonify({'status': 'error', 'message': 'shift is required for detection.'}), 400
+
+    temp_video_path = None
+    try:
+        _, ext = os.path.splitext(video_file.filename)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=(ext or '.mp4')) as temp_file:
+            temp_video_path = temp_file.name
+
+        video_file.save(temp_video_path)
+
+        extracted_data = extract_loom_data_from_video(temp_video_path)
+        if not isinstance(extracted_data, list):
+            return jsonify({'status': 'error', 'message': 'Extraction output must be a list of JSON rows.'}), 500
+
+        response_rows = _normalize_detected_rows(extracted_data, selected_shift)
+
+        if not response_rows:
+            return jsonify({'status': 'error', 'message': 'Could not detect loom rows from video.'}), 422
+
+        return jsonify({
+            'status': 'success',
+            'loom_number': response_rows[0]['loom_number'],
+            'meters': response_rows[0]['meters'],
+            'rows': response_rows,
+        }), 200
+    except Exception as e:
+        app.logger.error("Failed video detection: %s", e, exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Failed to detect data from video.'}), 500
+    finally:
+        if temp_video_path and os.path.exists(temp_video_path):
+            try:
+                os.remove(temp_video_path)
+            except Exception as cleanup_error:
+                app.logger.warning("Failed to remove temp video file %s: %s", temp_video_path, cleanup_error)
+
+
+@app.route('/add_video_form_bulk', methods=['POST'])
+@login_required
+@admin_required
+@handle_db_errors
+def add_video_form_bulk(client, db, loom_collection, users_collection, warp_data_collection, warp_history_collection):
+    """Final submit endpoint: stores all reviewed detected rows in MongoDB."""
+    data = request.get_json(silent=True) or {}
+
+    loomer_name = str(data.get('loomer_name') or '').strip()
+    selected_shift = str(data.get('shift') or '').strip()
+    salary_per_meter_raw = str(data.get('salary_per_meter') or '').strip()
+    date_raw = str(data.get('date') or '').strip()
+    rows = data.get('rows')
+
+    missing_fields = []
+    if not loomer_name:
+        missing_fields.append('loomer_name')
+    if not selected_shift:
+        missing_fields.append('shift')
+    if not salary_per_meter_raw:
+        missing_fields.append('salary_per_meter')
+    if not date_raw:
+        missing_fields.append('date')
+    if not isinstance(rows, list) or len(rows) == 0:
+        missing_fields.append('rows')
+
+    if missing_fields:
+        return jsonify({'status': 'error', 'message': f"Missing required field(s): {', '.join(missing_fields)}"}), 400
+
+    try:
+        docs_to_insert = _build_video_bulk_docs(
+            rows,
+            loomer_name=loomer_name,
+            selected_shift=selected_shift,
+            salary_per_meter_raw=salary_per_meter_raw,
+            date_raw=date_raw,
+        )
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Invalid row data, salary_per_meter, or date format.'}), 400
+
+    if not docs_to_insert:
+        return jsonify({'status': 'error', 'message': 'No valid rows to save.'}), 422
+
+    for doc in docs_to_insert:
+        duplicate_query = {
+            "loomer_name": doc["loomer_name"],
+            "loom_number": doc["loom_number"],
+            "shift": doc["shift"],
+            "date": doc["date"],
+        }
+        if loom_collection.find_one(duplicate_query):
+            return jsonify(
+                {
+                    'status': 'error',
+                    'message': f"A record already exists for loom {doc['loom_number']} on this shift/date.",
+                }
+            ), 409
+
+    insert_result = loom_collection.insert_many(docs_to_insert)
+    inserted_count = len(insert_result.inserted_ids)
+
+    try:
+        socketio.emit('new_loom_data', {'message': 'New loom data added!', 'count': inserted_count})
+    except Exception:
+        pass
+
+    return jsonify({'status': 'success', 'inserted_count': inserted_count}), 200
 
 @app.route("/add_form", methods=["POST"])
 @login_required

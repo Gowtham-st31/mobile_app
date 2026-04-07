@@ -31,6 +31,8 @@ pytz==2025.2
 PyYAML==6.0.2
 reportlab==4.4.2
 requests==2.32.4
+opencv-python-headless==4.10.0.84
+google-genai==0.8.0
 six==1.17.0
 svglib==1.5.1
 tinycss2==1.4.0

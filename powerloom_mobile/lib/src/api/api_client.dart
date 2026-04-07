@@ -195,6 +195,67 @@ class ApiClient {
     }
   }
 
+  Future<List<Map<String, dynamic>>> detectVideoData({
+    required File videoFile,
+    required String shift,
+  }) async {
+    try {
+      final fileName = videoFile.path.split(Platform.pathSeparator).last;
+      final response = await _dio.post(
+        '/detect-video-data',
+        data: FormData.fromMap({
+          'shift': shift,
+          'video': await MultipartFile.fromFile(videoFile.path, filename: fileName),
+        }),
+      );
+
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] != 'success') {
+        throw ApiException((data['message'] ?? 'Failed to detect video data').toString(), statusCode: response.statusCode);
+      }
+
+      final rows = (data['rows'] as List? ?? const []).cast<dynamic>();
+      return rows.map((e) => (e as Map).cast<String, dynamic>()).toList(growable: false);
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to detect video data';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
+  Future<int> addVideoBulkData({
+    required String loomerName,
+    required String shift,
+    required double salaryPerMeter,
+    required String dateYYYYMMDD,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/add_video_form_bulk',
+        data: {
+          'loomer_name': loomerName,
+          'shift': shift,
+          'salary_per_meter': salaryPerMeter,
+          'date': dateYYYYMMDD,
+          'rows': rows,
+        },
+        options: Options(headers: {'Content-Type': 'application/json'}),
+      );
+
+      final data = (response.data as Map).cast<String, dynamic>();
+      if (data['status'] != 'success') {
+        throw ApiException((data['message'] ?? 'Failed to add video rows').toString(), statusCode: response.statusCode);
+      }
+
+      final inserted = data['inserted_count'];
+      if (inserted is num) return inserted.toInt();
+      return int.tryParse(inserted?.toString() ?? '0') ?? 0;
+    } on DioException catch (e) {
+      final message = _extractMessage(e) ?? 'Failed to add video rows';
+      throw ApiException(message, statusCode: e.response?.statusCode);
+    }
+  }
+
   Future<ReportResult> getMetersReport({
     required String loomerName,
     required String shift,
