@@ -207,6 +207,11 @@ class ApiClient {
           'shift': shift,
           'video': await MultipartFile.fromFile(videoFile.path, filename: fileName),
         }),
+        // Video auto-detection can take significantly longer than standard API calls.
+        options: Options(
+          sendTimeout: const Duration(minutes: 10),
+          receiveTimeout: const Duration(minutes: 10),
+        ),
       );
 
       final payload = response.data;
@@ -265,7 +270,7 @@ class ApiClient {
     } on ApiException {
       rethrow;
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to detect video data';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to detect video data';
       throw ApiException(message, statusCode: e.response?.statusCode);
     } catch (_) {
       throw const ApiException('Failed to process auto-detection response.');
