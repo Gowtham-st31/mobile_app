@@ -23,7 +23,7 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
   final _metersController = TextEditingController();
   final _salaryController = TextEditingController();
 
-  String _shift = 'Morning';
+  String? _shift;
   DateTime _date = DateTime.now();
   bool _submitting = false;
 
@@ -54,9 +54,15 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
     final loom = _loomController.text.trim().toLowerCase();
     final meters = int.tryParse(_metersController.text.trim());
     final salary = double.tryParse(_salaryController.text.trim());
+    final selectedShift = _shift;
 
     if (meters == null || salary == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter valid meters and salary values.')));
+      return;
+    }
+
+    if (selectedShift == null || selectedShift.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a shift.')));
       return;
     }
 
@@ -66,7 +72,7 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
       await widget.controller.api.addLoomData(
         loomerName: loomer,
         loomNumber: loom,
-        shift: _shift,
+        shift: selectedShift,
         meters: meters,
         salaryPerMeter: salary,
         dateYYYYMMDD: dateStr,
@@ -111,11 +117,13 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
             DropdownButtonFormField<String>(
               value: _shift,
               decoration: const InputDecoration(labelText: 'Shift'),
+              hint: const Text('Select Shift'),
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Please select shift' : null,
               items: const [
                 DropdownMenuItem(value: 'Morning', child: Text('Morning')),
                 DropdownMenuItem(value: 'Night', child: Text('Night')),
               ],
-              onChanged: _submitting ? null : (v) => setState(() => _shift = v ?? 'Morning'),
+              onChanged: _submitting ? null : (v) => setState(() => _shift = v),
             ),
             const SizedBox(height: 12),
 
@@ -168,6 +176,7 @@ class _EnterDataScreenState extends State<EnterDataScreen> {
                           builder: (_) => UploadVideoDataScreen(
                             controller: widget.controller,
                             session: widget.session,
+                            initialShift: _shift,
                           ),
                         ),
                       );

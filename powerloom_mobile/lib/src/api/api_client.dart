@@ -209,16 +209,66 @@ class ApiClient {
         }),
       );
 
-      final data = (response.data as Map).cast<String, dynamic>();
+      final payload = response.data;
+      if (payload is! Map) {
+        final code = response.statusCode;
+        if (code == 401 || code == 403) {
+          throw ApiException('You are not authorized to run auto-detection. Please login with an admin account.', statusCode: code);
+        }
+        throw ApiException('Unexpected response from server during auto-detection.', statusCode: code);
+      }
+
+      final data = payload.cast<String, dynamic>();
       if (data['status'] != 'success') {
         throw ApiException((data['message'] ?? 'Failed to detect video data').toString(), statusCode: response.statusCode);
       }
 
-      final rows = (data['rows'] as List? ?? const []).cast<dynamic>();
-      return rows.map((e) => (e as Map).cast<String, dynamic>()).toList(growable: false);
+      dynamic rawRows = data['rows'] ?? data['detected_rows'] ?? data['data'];
+      rawRows ??= const [];
+
+      final rows = <Map<String, dynamic>>[];
+
+      if (rawRows is Map) {
+        rawRows = [rawRows];
+      }
+
+      if (rawRows is! List) {
+        final singleLoom = data['loom_number'] ?? data['loom'];
+        final singleMeters = data['meters'] ?? data['meter'];
+        if (singleLoom != null && singleMeters != null) {
+          rows.add({'loom_number': singleLoom, 'meters': singleMeters});
+        }
+        return rows;
+      }
+
+      for (final row in rawRows) {
+        if (row is Map) {
+          final cast = row.cast<String, dynamic>();
+          final loom = cast['loom_number'] ?? cast['loom'];
+          final meters = cast['meters'] ?? cast['meter'];
+          if (loom == null || meters == null) {
+            continue;
+          }
+          rows.add({'loom_number': loom, 'meters': meters});
+        }
+      }
+
+      if (rows.isEmpty) {
+        final singleLoom = data['loom_number'] ?? data['loom'];
+        final singleMeters = data['meters'] ?? data['meter'];
+        if (singleLoom != null && singleMeters != null) {
+          rows.add({'loom_number': singleLoom, 'meters': singleMeters});
+        }
+      }
+
+      return rows;
+    } on ApiException {
+      rethrow;
     } on DioException catch (e) {
       final message = _extractMessage(e) ?? 'Failed to detect video data';
       throw ApiException(message, statusCode: e.response?.statusCode);
+    } catch (_) {
+      throw const ApiException('Failed to process auto-detection response.');
     }
   }
 

@@ -11,11 +11,13 @@ import '../models/session.dart';
 class UploadVideoDataScreen extends StatefulWidget {
   final AppController controller;
   final Session session;
+  final String? initialShift;
 
   const UploadVideoDataScreen({
     super.key,
     required this.controller,
     required this.session,
+    this.initialShift,
   });
 
   @override
@@ -32,7 +34,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
 
   final ImagePicker _picker = ImagePicker();
 
-  String _shift = 'Morning';
+  String? _shift;
   DateTime _date = DateTime.now();
 
   bool _detecting = false;
@@ -49,6 +51,8 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   @override
   void initState() {
     super.initState();
+
+    _shift = _normalizeShiftValue(widget.initialShift);
 
     _loomController.addListener(() {
       if (_detectedRows.isEmpty) return;
@@ -84,6 +88,13 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  String? _normalizeShiftValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    if (value == 'morning' || value == 'day') return 'Morning';
+    if (value == 'night' || value == 'ngt') return 'Night';
+    return null;
+  }
+
   String _normalizeLoomNumber(String raw) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return '';
@@ -91,6 +102,22 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     final parsed = int.tryParse(trimmed);
     if (parsed == null) return trimmed;
     return parsed.toString();
+  }
+
+  int? _parseMetersValue(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is double) return raw.round();
+
+    final text = (raw ?? '').toString().trim();
+    if (text.isEmpty) return null;
+
+    final asInt = int.tryParse(text);
+    if (asInt != null) return asInt;
+
+    final asDouble = double.tryParse(text);
+    if (asDouble != null) return asDouble.round();
+
+    return null;
   }
 
   Future<void> _pickDate() async {
@@ -266,10 +293,10 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     final normalizedRows = <_DetectedRowEditor>[];
     for (final row in rows) {
       final loomRaw = (row['loom_number'] ?? row['loom'] ?? '').toString();
-      final metersRaw = row['meters'];
+      final metersRaw = row['meters'] ?? row['meter'];
 
       final loom = _normalizeLoomNumber(loomRaw);
-      final meters = int.tryParse('$metersRaw');
+      final meters = _parseMetersValue(metersRaw);
       if (loom.isEmpty || meters == null) {
         continue;
       }
@@ -297,11 +324,26 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       return;
     }
 
+    final selectedShift = _shift;
+    if (selectedShift == null || selectedShift.isEmpty) {
+      _showMessage(
+        autoTriggered
+            ? 'Video selected. Please choose shift, then tap Auto Detect from Video.'
+            : 'Please select shift before auto detection.',
+      );
+      return;
+    }
+
+    if (!file.existsSync()) {
+      _showMessage('Selected video file is not available. Please pick or record again.');
+      return;
+    }
+
     setState(() => _detecting = true);
     try {
       final rows = await widget.controller.api.detectVideoData(
         videoFile: file,
-        shift: _shift,
+        shift: selectedShift,
       );
 
       if (rows.isEmpty) {
@@ -358,6 +400,12 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final loomer = _loomerController.text.trim().toLowerCase();
+    final selectedShift = _shift;
+    if (selectedShift == null || selectedShift.isEmpty) {
+      _showMessage('Please select shift.');
+      return;
+    }
+
     final salary = double.tryParse(_salaryController.text.trim());
     if (salary == null) {
       _showMessage('Enter a valid salary per meter.');
@@ -376,7 +424,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       if (_detectedRows.isNotEmpty) {
         final inserted = await widget.controller.api.addVideoBulkData(
           loomerName: loomer,
-          shift: _shift,
+          shift: selectedShift,
           salaryPerMeter: salary,
           dateYYYYMMDD: dateStr,
           rows: rows,
@@ -387,7 +435,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
         await widget.controller.api.addLoomData(
           loomerName: loomer,
           loomNumber: _normalizeLoomNumber(_loomController.text).toLowerCase(),
-          shift: _shift,
+          shift: selectedShift,
           meters: int.parse(_metersController.text.trim()),
           salaryPerMeter: salary,
           dateYYYYMMDD: dateStr,
@@ -516,11 +564,13 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                 DropdownButtonFormField<String>(
                   value: _shift,
                   decoration: const InputDecoration(labelText: 'Shift'),
+                  hint: const Text('Select Shift'),
+                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Please select shift' : null,
                   items: const [
                     DropdownMenuItem(value: 'Morning', child: Text('Morning')),
                     DropdownMenuItem(value: 'Night', child: Text('Night')),
                   ],
-                  onChanged: (_submitting || _detecting) ? null : (v) => setState(() => _shift = v ?? 'Morning'),
+                  onChanged: (_submitting || _detecting) ? null : (v) => setState(() => _shift = v),
                 ),
                 const SizedBox(height: 12),
 
