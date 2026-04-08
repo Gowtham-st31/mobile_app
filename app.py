@@ -617,6 +617,9 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     VIDEO_PATH = video_path
     FRAME_SKIP = 20
     MAX_RETRIES = 3
+    MIN_MODEL_CONFIDENCE = float(os.getenv("MIN_MODEL_CONFIDENCE", "0.85"))
+    MIN_LAPLACIAN_VARIANCE = float(os.getenv("MIN_LAPLACIAN_VARIANCE", "90.0"))
+    MAX_MOTION_RATIO = float(os.getenv("MAX_MOTION_RATIO", "0.30"))
 
     client = genai.Client(api_key=api_key)
 
@@ -627,8 +630,45 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         raise RuntimeError("Cannot open video file")
 
     results = []
-    last_loom = None
+    best_row_index_by_loom = {}
+    best_confidence_by_loom = {}
     frame_count = 0
+    prev_gray = None
+
+    def _parse_confidence(raw_value) -> float:
+        """Parses model confidence and normalizes it to 0.0..1.0."""
+        try:
+            if raw_value is None:
+                return 0.0
+            text = str(raw_value).strip().replace("%", "")
+            if not text:
+                return 0.0
+            value = float(text)
+            if value > 1.0 and value <= 100.0:
+                value = value / 100.0
+            if value < 0.0:
+                return 0.0
+            if value > 1.0:
+                return 1.0
+            return value
+        except Exception:
+            return 0.0
+
+    def _frame_quality_metrics(frame_bgr, previous_gray):
+        """Returns quick quality metrics to reject blurry/shaky frames strictly."""
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        motion_ratio = 0.0
+        if previous_gray is not None and previous_gray.shape == gray.shape:
+            diff = cv2.absdiff(gray, previous_gray)
+            _, motion_mask = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+            moving_pixels = float(cv2.countNonZero(motion_mask))
+            total_pixels = float(gray.shape[0] * gray.shape[1])
+            if total_pixels > 0.0:
+                motion_ratio = moving_pixels / total_pixels
+
+        return gray, lap_var, motion_ratio
 
     prompt = """
 Read the industrial loom shift meter image.
@@ -646,6 +686,7 @@ If the frame is clear, extract ONLY:
 1. loom number
 2. current day shift meter
 3. previous night shift meter
+4. confidence (number from 0.00 to 1.00)
 
 Return ONLY JSON.
 
@@ -653,7 +694,8 @@ Example:
 {
   "loom": "008",
   "Tuesday_Day": "0031.6",
-  "Monday_Ngt": "0000.0"
+    "Monday_Ngt": "0000.0",
+    "confidence": 0.91
 }
 
 Read the day labels exactly as shown in image.
@@ -677,6 +719,27 @@ Only JSON.
         print(f"\n{'='*50}")
         print(f"PROCESSING FRAME: {frame_count}")
         print(f"{'='*50}")
+
+        current_gray, lap_var, motion_ratio = _frame_quality_metrics(frame, prev_gray)
+        prev_gray = current_gray
+        print(
+            f"FRAME QUALITY: lap_var={lap_var:.2f} motion_ratio={motion_ratio:.3f} "
+            f"(min_lap={MIN_LAPLACIAN_VARIANCE:.2f}, max_motion={MAX_MOTION_RATIO:.3f})"
+        )
+
+        if lap_var < MIN_LAPLACIAN_VARIANCE:
+            print(
+                f"\nSKIPPED FRAME {frame_count}: strict blur gate "
+                f"(lap_var={lap_var:.2f} < {MIN_LAPLACIAN_VARIANCE:.2f})"
+            )
+            continue
+
+        if motion_ratio > MAX_MOTION_RATIO:
+            print(
+                f"\nSKIPPED FRAME {frame_count}: strict shake gate "
+                f"(motion_ratio={motion_ratio:.3f} > {MAX_MOTION_RATIO:.3f})"
+            )
+            continue
 
         filename = f"frame_{frame_count}.jpg"
         cv2.imwrite(filename, frame)
@@ -720,16 +783,17 @@ Only JSON.
                 print(json_text)
 
                 raw_row = json.loads(json_text)
+                if not isinstance(raw_row, dict):
+                    raise ValueError("Model output must be a JSON object")
 
                 # Model-level frame rejection for shaky/unclear frames.
-                if isinstance(raw_row, dict):
-                    reject_flag = raw_row.get("reject")
-                    reject_text = str(reject_flag).strip().lower()
-                    if reject_flag is True or reject_text in {"true", "1", "yes"}:
-                        reason = str(raw_row.get("reason") or "rejected_by_model").strip()
-                        print(f"\nSKIPPED FRAME {frame_count}: {reason}")
-                        success = True
-                        continue
+                reject_flag = raw_row.get("reject")
+                reject_text = str(reject_flag).strip().lower()
+                if reject_flag is True or reject_text in {"true", "1", "yes"}:
+                    reason = str(raw_row.get("reason") or "rejected_by_model").strip()
+                    print(f"\nSKIPPED FRAME {frame_count}: {reason}")
+                    success = True
+                    continue
 
                 # ===== DYNAMIC JSON =====
                 row = {}
@@ -739,6 +803,8 @@ Only JSON.
 
                     if clean_key.lower() == "loom":
                         row["loom"] = value
+                    elif clean_key.lower() == "confidence":
+                        row["confidence"] = value
                     else:
                         row[clean_key] = value
 
@@ -750,9 +816,21 @@ Only JSON.
                     raise ValueError("Model output missing loom number")
                 row["loom"] = loom_value
 
+                frame_confidence = _parse_confidence(row.get("confidence"))
+                row["confidence"] = round(frame_confidence, 4)
+                print(f"\nFRAME CONFIDENCE: {frame_confidence:.2f}")
+
+                if frame_confidence < MIN_MODEL_CONFIDENCE:
+                    print(
+                        f"\nSKIPPED FRAME {frame_count}: low model confidence "
+                        f"({frame_confidence:.2f} < {MIN_MODEL_CONFIDENCE:.2f})"
+                    )
+                    success = True
+                    continue
+
                 # ===== APPLY ROUNDING FOR ALL DAYS =====
                 for key in list(row.keys()):
-                    if key == "loom":
+                    if key in {"loom", "confidence"}:
                         continue
 
                     if row[key] is None:
@@ -774,14 +852,33 @@ Only JSON.
                 print(row)
 
                 # ===== DUPLICATE CHECK =====
-                if row["loom"] != last_loom:
-                    row["frame"] = frame_count
-                    results.append(row)
-                    last_loom = row["loom"]
+                row["frame"] = frame_count
+                loom_key = row["loom"]
+                existing_index = best_row_index_by_loom.get(loom_key)
 
-                    print(f"\n✅ ADDED LOOM {row['loom']}")
+                if existing_index is None:
+                    results.append(row)
+                    best_row_index_by_loom[loom_key] = len(results) - 1
+                    best_confidence_by_loom[loom_key] = frame_confidence
+                    print(f"\n✅ ADDED LOOM {loom_key} (confidence={frame_confidence:.2f})")
                 else:
-                    print(f"\n⚠ DUPLICATE SKIPPED: {row['loom']}")
+                    best_conf = float(best_confidence_by_loom.get(loom_key, 0.0))
+                    if frame_confidence > best_conf:
+                        old_row = results[existing_index]
+                        old_conf = float(old_row.get("confidence") or best_conf)
+                        old_frame = old_row.get("frame")
+                        results[existing_index] = row
+                        best_confidence_by_loom[loom_key] = frame_confidence
+                        print(
+                            f"\n🔁 DUPLICATE REPLACED: loom {loom_key} "
+                            f"frame {old_frame} (confidence={old_conf:.2f}) -> "
+                            f"frame {frame_count} (confidence={frame_confidence:.2f})"
+                        )
+                    else:
+                        print(
+                            f"\n⚠ DUPLICATE SKIPPED: loom {loom_key} "
+                            f"frame {frame_count} confidence={frame_confidence:.2f} <= best={best_conf:.2f}"
+                        )
 
                 success = True
 
