@@ -200,17 +200,31 @@ class ApiClient {
     required String shift,
   }) async {
     try {
+      final fileSizeBytes = await videoFile.length();
+      if (fileSizeBytes <= 0) {
+        throw const ApiException('Selected video file is empty. Please choose a valid video.');
+      }
+
       final fileName = videoFile.path.split(Platform.pathSeparator).last;
+      final videoPart = MultipartFile(
+        videoFile.openRead(),
+        fileSizeBytes,
+        filename: fileName,
+      );
+
       final response = await _dio.post(
         '/detect-video-data',
         data: FormData.fromMap({
           'shift': shift,
-          'video': await MultipartFile.fromFile(videoFile.path, filename: fileName),
+          // Diagnostic metadata; backend can ignore this field safely.
+          'video_size_bytes': fileSizeBytes.toString(),
+          // Upload the complete original video stream to backend.
+          'video': videoPart,
         }),
         // Video auto-detection can take significantly longer than standard API calls.
         options: Options(
-          sendTimeout: const Duration(minutes: 10),
-          receiveTimeout: const Duration(minutes: 10),
+          sendTimeout: const Duration(minutes: 30),
+          receiveTimeout: const Duration(minutes: 30),
         ),
       );
 

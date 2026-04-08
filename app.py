@@ -633,7 +633,16 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     prompt = """
 Read the industrial loom shift meter image.
 
-Extract ONLY:
+If the frame is shaky, motion-blurred, unreadable, partially cropped,
+or you are not confident, reject the frame.
+
+For rejected frames, return ONLY this JSON shape:
+{
+    "reject": true,
+    "reason": "shaky_or_unreadable_frame"
+}
+
+If the frame is clear, extract ONLY:
 1. loom number
 2. current day shift meter
 3. previous night shift meter
@@ -712,6 +721,16 @@ Only JSON.
 
                 raw_row = json.loads(json_text)
 
+                # Model-level frame rejection for shaky/unclear frames.
+                if isinstance(raw_row, dict):
+                    reject_flag = raw_row.get("reject")
+                    reject_text = str(reject_flag).strip().lower()
+                    if reject_flag is True or reject_text in {"true", "1", "yes"}:
+                        reason = str(raw_row.get("reason") or "rejected_by_model").strip()
+                        print(f"\nSKIPPED FRAME {frame_count}: {reason}")
+                        success = True
+                        continue
+
                 # ===== DYNAMIC JSON =====
                 row = {}
 
@@ -725,6 +744,11 @@ Only JSON.
 
                 print("\nNORMALIZED JSON:")
                 print(row)
+
+                loom_value = str(row.get("loom") or "").strip()
+                if not loom_value:
+                    raise ValueError("Model output missing loom number")
+                row["loom"] = loom_value
 
                 # ===== APPLY ROUNDING FOR ALL DAYS =====
                 for key in list(row.keys()):
