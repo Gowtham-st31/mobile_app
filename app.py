@@ -611,12 +611,14 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     round_tracker = {}
 
     # ===== CONFIG =====
-    API_KEY = "AIzaSyD8tJucKTpkTYpapSh-F0JgRJxUldw7YyI"
+    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set on the server.")
     VIDEO_PATH = video_path
     FRAME_SKIP = 20
     MAX_RETRIES = 3
 
-    client = genai.Client(api_key=API_KEY)
+    client = genai.Client(api_key=api_key)
 
     cap = cv2.VideoCapture(VIDEO_PATH)
 
