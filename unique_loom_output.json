@@ -1,163 +1,220 @@
 [
     {
         "loom": "001",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 20
+        "Wednesday_Day": 32,
+        "frame": 20,
+        "confidence": 0.96,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "002",
-        "Wednesday_Day": 30,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 80
+        "Wednesday_Day": 30,
+        "frame": 80,
+        "confidence": 0.5989,
+        "group_count": 5,
+        "group_majority_count": 5
     },
     {
         "loom": "003",
-        "Wednesday_Day": 31,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 180
+        "Wednesday_Day": 31,
+        "frame": 180,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "004",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 39,
-        "confidence": 0.98,
-        "frame": 240
+        "Wednesday_Day": 32,
+        "frame": 240,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "005",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 39,
-        "confidence": 0.98,
-        "frame": 280
+        "Wednesday_Day": 32,
+        "frame": 280,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "006",
-        "Wednesday_Day": 33,
+        "Monday_Ngt": 40,
+        "Tuesday_Day": 33,
         "Tuesday_Ngt": 40,
-        "confidence": 0.98,
-        "frame": 340
+        "Wednesday_Day": 33,
+        "frame": 340,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "007",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 39,
-        "confidence": 0.98,
-        "frame": 400
+        "Wednesday_Day": 32,
+        "frame": 400,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "008",
+        "Tuesday_Ngt": 40,
         "Wednesday_Day": 32,
-        "Tuesday_Ngt": 39,
-        "confidence": 0.98,
-        "frame": 440
+        "frame": 440,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "009",
-        "Wednesday_Day": 31,
         "Tuesday_Ngt": 37,
-        "confidence": 0.98,
-        "frame": 500
+        "Wednesday_Day": 31,
+        "frame": 500,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "010",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 560
+        "Wednesday_Day": 32,
+        "frame": 560,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "011",
-        "Wednesday_Day": 30,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 620
+        "Wednesday_Day": 30,
+        "frame": 620,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
+    },
+    {
+        "loom": "012",
+        "Tuesday_Ngt": 36,
+        "Wednesday_Day": 31,
+        "frame": 660,
+        "confidence": 0.709,
+        "group_count": 1,
+        "group_majority_count": 1
     },
     {
         "loom": "013",
-        "Wednesday_Day": 30,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 700
+        "Wednesday_Day": 30,
+        "frame": 700,
+        "confidence": 0.9369,
+        "group_count": 4,
+        "group_majority_count": 4
     },
     {
         "loom": "014",
-        "Wednesday_Day": 31,
         "Tuesday_Ngt": 40,
-        "confidence": 0.98,
-        "frame": 760
+        "Wednesday_Day": 31,
+        "frame": 760,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "015",
-        "Wednesday_Day": 29,
         "Tuesday_Ngt": 36,
-        "confidence": 0.98,
-        "frame": 800
+        "Wednesday_Day": 29,
+        "frame": 800,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "016",
+        "Tuesday_Ngt": 39,
         "Wednesday_Day": 32,
-        "Tuesday_Ngt": 40,
-        "confidence": 0.98,
-        "frame": 840
+        "frame": 840,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "017",
-        "Wednesday_Day": 31,
         "Tuesday_Ngt": 37,
-        "confidence": 0.98,
-        "frame": 880
+        "Wednesday_Day": 31,
+        "frame": 880,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "018",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 920
+        "Wednesday_Day": 32,
+        "frame": 920,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "019",
-        "Wednesday_Day": 33,
         "Tuesday_Ngt": 39,
-        "confidence": 0.98,
-        "frame": 960
+        "Wednesday_Day": 33,
+        "frame": 960,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "020",
-        "Wednesday_Day": 30,
         "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 1000
+        "Wednesday_Day": 30,
+        "frame": 1000,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "021",
-        "Wednesday_Day": 32,
         "Tuesday_Ngt": 37,
-        "confidence": 0.98,
-        "frame": 1040
+        "Wednesday_Day": 32,
+        "frame": 1040,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "022",
-        "Wednesday_Day": 31,
         "Tuesday_Ngt": 40,
-        "confidence": 0.98,
-        "frame": 1100
+        "Wednesday_Day": 31,
+        "frame": 1080,
+        "confidence": 0.95,
+        "group_count": 2,
+        "group_majority_count": 2
     },
     {
         "loom": "023",
-        "Wednesday_Day": 31,
         "Tuesday_Ngt": 37,
-        "confidence": 0.98,
-        "frame": 1120
+        "Wednesday_Day": 31,
+        "frame": 1120,
+        "confidence": 0.95,
+        "group_count": 1,
+        "group_majority_count": 1
     },
     {
         "loom": "024",
+        "Tuesday_Ngt": 39,
         "Wednesday_Day": 32,
-        "Tuesday_Ngt": 38,
-        "confidence": 0.98,
-        "frame": 1140
+        "frame": 1140,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
     }
 ]

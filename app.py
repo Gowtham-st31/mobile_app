@@ -573,29 +573,33 @@ round_tracker = {}
 
 
 def custom_shift_round(value_str, day_label, shift_label):
-    value = float(value_str)
-    whole = int(value)
-    decimal = value - whole
+    # Use Decimal so .5 ties are detected reliably (float math can miss exact 0.5).
+    from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+
+    try:
+        value = Decimal(str(value_str).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        value = Decimal("0")
+
+    whole = int(value.to_integral_value(rounding=ROUND_FLOOR))
+    decimal = value - Decimal(whole)
 
     key = f"{day_label}_{shift_label}"
 
-    if decimal > 0.5:
+    half = Decimal("0.5")
+    eps = Decimal("0.000001")
+
+    if decimal > half + eps:
         return whole + 1
 
-    elif decimal < 0.5:
+    elif decimal < half - eps:
         return whole
 
     else:
-        # alternate .5 rounding
-        if key not in round_tracker:
-            round_tracker[key] = False   # first .5 -> round down
-
-        if round_tracker[key]:
-            result = whole + 1
-        else:
-            result = whole
-
-        round_tracker[key] = not round_tracker[key]
+        # Alternate exact/near .5 ties: low, high, low, high ... per key.
+        next_up = bool(round_tracker.get(key, False))
+        result = whole + 1 if next_up else whole
+        round_tracker[key] = not next_up
         return result
 
 
@@ -605,6 +609,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     import re
     import time
     import os
+    from collections import Counter, defaultdict
     from google import genai
 
     global round_tracker
@@ -617,6 +622,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     VIDEO_PATH = video_path
     FRAME_SKIP = 20
     MAX_RETRIES = 3
+    LOOM_SWITCH_CONFIRMATION_FRAMES = int(os.getenv("LOOM_SWITCH_CONFIRMATION_FRAMES", "1"))
     MIN_MODEL_CONFIDENCE = float(os.getenv("MIN_MODEL_CONFIDENCE", "0.85"))
     MIN_LAPLACIAN_VARIANCE = float(os.getenv("MIN_LAPLACIAN_VARIANCE", "90.0"))
     MAX_MOTION_RATIO = float(os.getenv("MAX_MOTION_RATIO", "0.30"))
@@ -630,10 +636,10 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         raise RuntimeError("Cannot open video file")
 
     results = []
-    best_row_index_by_loom = {}
-    best_confidence_by_loom = {}
     frame_count = 0
     prev_gray = None
+    current_group_rows = []
+    pending_switch_rows = []
 
     def _parse_confidence(raw_value) -> float:
         """Parses model confidence and normalizes it to 0.0..1.0."""
@@ -670,19 +676,114 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
 
         return gray, lap_var, motion_ratio
 
+    def _vote_key(value):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return ("bool", bool(value))
+        if isinstance(value, int):
+            return ("int", int(value))
+        if isinstance(value, float):
+            return ("float", round(float(value), 4))
+        text = str(value).strip()
+        if not text:
+            return None
+        return ("str", text)
+
+    def _majority_loom(rows: list[dict]) -> str:
+        loom_votes = Counter()
+        loom_weights = defaultdict(float)
+        for r in rows:
+            loom = str(r.get("loom") or "").strip()
+            if not loom:
+                continue
+            loom_votes[loom] += 1
+            loom_weights[loom] += float(r.get("confidence") or 0.0)
+        if not loom_votes:
+            return ""
+        return max(loom_votes.keys(), key=lambda k: (loom_votes[k], loom_weights[k], k))
+
+    def _majority_value(rows: list[dict], key: str):
+        votes = Counter()
+        weights = defaultdict(float)
+        sample_value = {}
+        for r in rows:
+            value = r.get(key)
+            vote_key = _vote_key(value)
+            if vote_key is None:
+                continue
+            votes[vote_key] += 1
+            weights[vote_key] += float(r.get("confidence") or 0.0)
+            if vote_key not in sample_value:
+                sample_value[vote_key] = value
+        if not votes:
+            return None, 0, 0
+        best_vote = max(votes.keys(), key=lambda k: (votes[k], weights[k]))
+        return sample_value[best_vote], int(votes[best_vote]), int(sum(votes.values()))
+
+    def _finalize_group_rows(group_rows: list[dict]) -> dict | None:
+        if not group_rows:
+            return None
+
+        group_loom = _majority_loom(group_rows)
+        if not group_loom:
+            return None
+
+        loom_rows = [r for r in group_rows if str(r.get("loom") or "").strip() == group_loom]
+        if not loom_rows:
+            return None
+
+        print(f"\n🧮 FINALIZING GROUP: loom={group_loom}, candidates={len(group_rows)}, matching_loom={len(loom_rows)}")
+
+        final_row = {"loom": group_loom}
+        keys = set()
+        for r in loom_rows:
+            for k in r.keys():
+                if k in {"loom", "confidence", "frame"}:
+                    continue
+                keys.add(k)
+
+        for key in sorted(keys):
+            selected_value, vote_count, total_votes = _majority_value(loom_rows, key)
+            if selected_value is None:
+                continue
+            final_row[key] = selected_value
+            print(f"  • {key}: {selected_value} (votes {vote_count}/{total_votes})")
+
+        # Round only once on finalized values (after majority vote), not per frame.
+        # This prevents .5 alternation from polluting per-frame majority counts.
+        for key in list(final_row.keys()):
+            if key in {"loom", "confidence", "frame", "group_count", "group_majority_count"}:
+                continue
+
+            value = final_row.get(key)
+            if value is None:
+                continue
+
+            parts = key.split("_")
+            if len(parts) == 2:
+                day_label = parts[0]
+                shift_label = parts[1]
+                final_row[key] = custom_shift_round(str(value), day_label, shift_label)
+
+        best_src = max(loom_rows, key=lambda r: float(r.get("confidence") or 0.0))
+        avg_conf = sum(float(r.get("confidence") or 0.0) for r in loom_rows) / max(len(loom_rows), 1)
+        final_row["frame"] = best_src.get("frame")
+        final_row["confidence"] = round(avg_conf, 4)
+        final_row["group_count"] = len(group_rows)
+        final_row["group_majority_count"] = len(loom_rows)
+
+        return final_row
+
     prompt = """
 Read the industrial loom shift meter image.
 
-If the frame is shaky, motion-blurred, unreadable, partially cropped,
-or you are not confident, reject the frame.
+Never return reject-only JSON.
+Always return the best estimate in JSON with a confidence score.
+If the frame is shaky/blurred/unreadable, still return your best estimate,
+but set confidence very low.
 
-For rejected frames, return ONLY this JSON shape:
-{
-    "reject": true,
-    "reason": "shaky_or_unreadable_frame"
-}
-
-If the frame is clear, extract ONLY:
+Extract:
 1. loom number
 2. current day shift meter
 3. previous night shift meter
@@ -727,19 +828,25 @@ Only JSON.
             f"(min_lap={MIN_LAPLACIAN_VARIANCE:.2f}, max_motion={MAX_MOTION_RATIO:.3f})"
         )
 
+        quality_penalty = 1.0
+
         if lap_var < MIN_LAPLACIAN_VARIANCE:
+            # Do not drop the frame; reduce its weight so loom sections are not missed.
+            blur_ratio = lap_var / max(MIN_LAPLACIAN_VARIANCE, 1e-6)
+            quality_penalty *= max(0.20, min(1.0, blur_ratio))
             print(
-                f"\nSKIPPED FRAME {frame_count}: strict blur gate "
-                f"(lap_var={lap_var:.2f} < {MIN_LAPLACIAN_VARIANCE:.2f})"
+                f"\n⚠ LOW QUALITY FRAME {frame_count}: blur detected "
+                f"(lap_var={lap_var:.2f} < {MIN_LAPLACIAN_VARIANCE:.2f}); penalty={quality_penalty:.2f}"
             )
-            continue
 
         if motion_ratio > MAX_MOTION_RATIO:
+            # Do not drop the frame; reduce its weight so loom sections are not missed.
+            motion_over = min(1.0, (motion_ratio - MAX_MOTION_RATIO) / max(MAX_MOTION_RATIO, 1e-6))
+            quality_penalty *= max(0.20, 1.0 - motion_over)
             print(
-                f"\nSKIPPED FRAME {frame_count}: strict shake gate "
-                f"(motion_ratio={motion_ratio:.3f} > {MAX_MOTION_RATIO:.3f})"
+                f"\n⚠ LOW QUALITY FRAME {frame_count}: shake detected "
+                f"(motion_ratio={motion_ratio:.3f} > {MAX_MOTION_RATIO:.3f}); penalty={quality_penalty:.2f}"
             )
-            continue
 
         filename = f"frame_{frame_count}.jpg"
         cv2.imwrite(filename, frame)
@@ -791,9 +898,51 @@ Only JSON.
                 reject_text = str(reject_flag).strip().lower()
                 if reject_flag is True or reject_text in {"true", "1", "yes"}:
                     reason = str(raw_row.get("reason") or "rejected_by_model").strip()
-                    print(f"\nSKIPPED FRAME {frame_count}: {reason}")
-                    success = True
-                    continue
+                    print(f"\n⚠ MODEL REJECTED FRAME {frame_count}: {reason}. Requesting forced best-effort output...")
+
+                    fallback_prompt = """
+Read the industrial loom shift meter image.
+
+Do NOT return reject JSON.
+Return best-effort JSON with:
+1. loom
+2. current day shift meter
+3. previous night shift meter
+4. confidence (0.00 to 1.00)
+
+If uncertain, keep confidence low.
+Only JSON.
+"""
+
+                    fallback_response = client.models.generate_content(
+                        model="gemma-3-4b-it",
+                        contents=[
+                            fallback_prompt,
+                            genai.types.Part.from_bytes(
+                                data=image_bytes,
+                                mime_type="image/jpeg"
+                            )
+                        ]
+                    )
+
+                    fallback_text = (fallback_response.text or "").strip()
+                    print("\nFALLBACK RAW OUTPUT:")
+                    print("-" * 50)
+                    print(fallback_text)
+                    print("-" * 50)
+
+                    fallback_match = re.search(r'\{.*?\}', fallback_text, re.DOTALL)
+                    if not fallback_match:
+                        raise ValueError("No JSON found in fallback model output")
+
+                    raw_row = json.loads(fallback_match.group(0))
+                    if not isinstance(raw_row, dict):
+                        raise ValueError("Fallback model output must be a JSON object")
+
+                    reject_flag = raw_row.get("reject")
+                    reject_text = str(reject_flag).strip().lower()
+                    if reject_flag is True or reject_text in {"true", "1", "yes"}:
+                        raise ValueError("Model rejected frame even in fallback mode")
 
                 # ===== DYNAMIC JSON =====
                 row = {}
@@ -816,69 +965,86 @@ Only JSON.
                     raise ValueError("Model output missing loom number")
                 row["loom"] = loom_value
 
-                frame_confidence = _parse_confidence(row.get("confidence"))
+                model_confidence = _parse_confidence(row.get("confidence"))
+                frame_confidence = max(0.0, min(1.0, model_confidence * quality_penalty))
                 row["confidence"] = round(frame_confidence, 4)
-                print(f"\nFRAME CONFIDENCE: {frame_confidence:.2f}")
+                print(
+                    f"\nFRAME CONFIDENCE: model={model_confidence:.2f}, "
+                    f"quality_penalty={quality_penalty:.2f}, effective={frame_confidence:.2f}"
+                )
 
-                if frame_confidence < MIN_MODEL_CONFIDENCE:
+                if model_confidence < MIN_MODEL_CONFIDENCE:
                     print(
-                        f"\nSKIPPED FRAME {frame_count}: low model confidence "
-                        f"({frame_confidence:.2f} < {MIN_MODEL_CONFIDENCE:.2f})"
+                        f"\n⚠ LOW MODEL CONFIDENCE FRAME {frame_count}: "
+                        f"model={model_confidence:.2f} < threshold={MIN_MODEL_CONFIDENCE:.2f}. "
+                        f"Keeping frame with reduced effective confidence={frame_confidence:.2f}"
                     )
-                    success = True
-                    continue
 
-                # ===== APPLY ROUNDING FOR ALL DAYS =====
+                # Keep values unrounded for group majority voting.
                 for key in list(row.keys()):
                     if key in {"loom", "confidence"}:
                         continue
-
-                    if row[key] is None:
+                    value = row.get(key)
+                    if value is None:
                         continue
+                    try:
+                        row[key] = float(str(value).strip())
+                    except Exception:
+                        row[key] = str(value).strip()
 
-                    parts = key.split("_")
-
-                    if len(parts) == 2:
-                        day_label = parts[0]
-                        shift_label = parts[1]
-
-                        row[key] = custom_shift_round(
-                            row[key],
-                            day_label,
-                            shift_label
-                        )
-
-                print("\nROUNDED JSON:")
+                print("\nCANDIDATE JSON (UNROUNDED):")
                 print(row)
 
-                # ===== DUPLICATE CHECK =====
+                # ===== GROUP BUFFERING (do not save per frame) =====
                 row["frame"] = frame_count
-                loom_key = row["loom"]
-                existing_index = best_row_index_by_loom.get(loom_key)
+                loom_key = str(row["loom"]).strip()
 
-                if existing_index is None:
-                    results.append(row)
-                    best_row_index_by_loom[loom_key] = len(results) - 1
-                    best_confidence_by_loom[loom_key] = frame_confidence
-                    print(f"\n✅ ADDED LOOM {loom_key} (confidence={frame_confidence:.2f})")
+                if not current_group_rows:
+                    current_group_rows.append(row)
+                    pending_switch_rows = []
+                    print(f"\n🧩 GROUP START: loom={loom_key}, frame={frame_count}")
                 else:
-                    best_conf = float(best_confidence_by_loom.get(loom_key, 0.0))
-                    if frame_confidence > best_conf:
-                        old_row = results[existing_index]
-                        old_conf = float(old_row.get("confidence") or best_conf)
-                        old_frame = old_row.get("frame")
-                        results[existing_index] = row
-                        best_confidence_by_loom[loom_key] = frame_confidence
+                    current_majority_loom = _majority_loom(current_group_rows) or loom_key
+                    if loom_key == current_majority_loom:
+                        if pending_switch_rows:
+                            print(
+                                f"\n↩️ SWITCH CANCELED: candidate returned to current loom={current_majority_loom}. "
+                                f"Merging pending_count={len(pending_switch_rows)} back into current group."
+                            )
+                            current_group_rows.extend(pending_switch_rows)
+                            pending_switch_rows = []
+                        current_group_rows.append(row)
                         print(
-                            f"\n🔁 DUPLICATE REPLACED: loom {loom_key} "
-                            f"frame {old_frame} (confidence={old_conf:.2f}) -> "
-                            f"frame {frame_count} (confidence={frame_confidence:.2f})"
+                            f"\n➕ GROUP APPEND: loom={loom_key}, frame={frame_count}, "
+                            f"group_size={len(current_group_rows)}"
                         )
                     else:
+                        pending_switch_rows.append(row)
+                        pending_majority_loom = _majority_loom(pending_switch_rows) or loom_key
                         print(
-                            f"\n⚠ DUPLICATE SKIPPED: loom {loom_key} "
-                            f"frame {frame_count} confidence={frame_confidence:.2f} <= best={best_conf:.2f}"
+                            f"\n⏳ PENDING SWITCH: current={current_majority_loom}, candidate={loom_key}, "
+                            f"pending_majority={pending_majority_loom}, pending_count={len(pending_switch_rows)}"
                         )
+
+                        if (
+                            len(pending_switch_rows) >= LOOM_SWITCH_CONFIRMATION_FRAMES
+                            and pending_majority_loom
+                            and pending_majority_loom != current_majority_loom
+                        ):
+                            finalized = _finalize_group_rows(current_group_rows)
+                            if finalized is not None:
+                                results.append(finalized)
+                                print(
+                                    f"\n✅ GROUP SAVED: loom={finalized.get('loom')} "
+                                    f"from {len(current_group_rows)} collected frames"
+                                )
+
+                            current_group_rows = list(pending_switch_rows)
+                            pending_switch_rows = []
+                            print(
+                                f"\n🧩 NEW GROUP START: loom={_majority_loom(current_group_rows)}, "
+                                f"seed_count={len(current_group_rows)}"
+                            )
 
                 success = True
 
@@ -897,6 +1063,48 @@ Only JSON.
 
         if os.path.exists(filename):
             os.remove(filename)
+
+    # Finalize remaining buffered groups.
+    if pending_switch_rows:
+        if not current_group_rows:
+            current_group_rows = list(pending_switch_rows)
+            pending_switch_rows = []
+        else:
+            current_majority_loom = _majority_loom(current_group_rows)
+            pending_majority_loom = _majority_loom(pending_switch_rows)
+
+            if (
+                len(pending_switch_rows) >= LOOM_SWITCH_CONFIRMATION_FRAMES
+                and pending_majority_loom
+                and pending_majority_loom != current_majority_loom
+            ):
+                finalized = _finalize_group_rows(current_group_rows)
+                if finalized is not None:
+                    results.append(finalized)
+                    print(
+                        f"\n✅ GROUP SAVED: loom={finalized.get('loom')} "
+                        f"from {len(current_group_rows)} collected frames"
+                    )
+                current_group_rows = list(pending_switch_rows)
+                print(
+                    f"\n🧩 TAIL GROUP START: loom={_majority_loom(current_group_rows)}, "
+                    f"seed_count={len(current_group_rows)}"
+                )
+            else:
+                current_group_rows.extend(pending_switch_rows)
+                print(
+                    f"\nℹ️ TAIL MERGE: pending_count={len(pending_switch_rows)} merged into current group"
+                )
+            pending_switch_rows = []
+
+    if current_group_rows:
+        finalized = _finalize_group_rows(current_group_rows)
+        if finalized is not None:
+            results.append(finalized)
+            print(
+                f"\n✅ GROUP SAVED: loom={finalized.get('loom')} "
+                f"from {len(current_group_rows)} collected frames"
+            )
 
     cap.release()
 
