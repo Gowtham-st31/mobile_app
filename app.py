@@ -572,7 +572,7 @@ def call_gemini_text(
 round_tracker = {}
 
 
-def custom_shift_round(value_str, day_label, shift_label):
+def custom_shift_round(value_str, day_label, shift_label, loom_label=None, tracker=None):
     # Use Decimal so .5 ties are detected reliably (float math can miss exact 0.5).
     from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
@@ -584,7 +584,12 @@ def custom_shift_round(value_str, day_label, shift_label):
     whole = int(value.to_integral_value(rounding=ROUND_FLOOR))
     decimal = value - Decimal(whole)
 
-    key = f"{day_label}_{shift_label}"
+    state = round_tracker if tracker is None else tracker
+
+    if loom_label is None:
+        key = f"{day_label}_{shift_label}"
+    else:
+        key = f"{str(loom_label).strip()}::{day_label}_{shift_label}"
 
     half = Decimal("0.5")
     eps = Decimal("0.000001")
@@ -597,9 +602,9 @@ def custom_shift_round(value_str, day_label, shift_label):
 
     else:
         # Alternate exact/near .5 ties: low, high, low, high ... per key.
-        next_up = bool(round_tracker.get(key, False))
+        next_up = bool(state.get(key, False))
         result = whole + 1 if next_up else whole
-        round_tracker[key] = not next_up
+        state[key] = not next_up
         return result
 
 
@@ -614,6 +619,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
 
     global round_tracker
     round_tracker = {}
+    local_round_tracker = {}
 
     # ===== CONFIG =====
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
@@ -763,7 +769,13 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
             if len(parts) == 2:
                 day_label = parts[0]
                 shift_label = parts[1]
-                final_row[key] = custom_shift_round(str(value), day_label, shift_label)
+                final_row[key] = custom_shift_round(
+                    str(value),
+                    day_label,
+                    shift_label,
+                    loom_label=final_row.get("loom"),
+                    tracker=local_round_tracker,
+                )
 
         best_src = max(loom_rows, key=lambda r: float(r.get("confidence") or 0.0))
         avg_conf = sum(float(r.get("confidence") or 0.0) for r in loom_rows) / max(len(loom_rows), 1)
@@ -1985,6 +1997,7 @@ def get_users(client, db, loom_collection, users_collection, warp_data_collectio
 @admin_required
 def detect_video_data():
     """Receives an uploaded video and returns detected rows for user review."""
+    global round_tracker
     video_file = request.files.get('video') or request.files.get('video_file')
     selected_shift = (request.form.get('shift') or request.form.get('video_shift') or '').strip()
 
@@ -2026,6 +2039,18 @@ def detect_video_data():
                 os.remove(temp_video_path)
             except Exception as cleanup_error:
                 app.logger.warning("Failed to remove temp video file %s: %s", temp_video_path, cleanup_error)
+
+        # Clear any residual in-memory state after each video detection run.
+        try:
+            round_tracker.clear()
+        except Exception:
+            round_tracker = {}
+
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
 
 
 @app.route('/add_video_form_bulk', methods=['POST'])
