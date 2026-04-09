@@ -1,220 +1,218 @@
 [
     {
         "loom": "001",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 32,
+        "Thursday_Day": 27,
+        "Wednesday_Ngt": 18,
         "frame": 20,
-        "confidence": 0.96,
-        "group_count": 3,
-        "group_majority_count": 3
+        "confidence": 0.95,
+        "group_count": 1,
+        "group_majority_count": 1
     },
     {
         "loom": "002",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 30,
-        "frame": 80,
-        "confidence": 0.5989,
-        "group_count": 5,
-        "group_majority_count": 5
-    },
-    {
-        "loom": "003",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 31,
-        "frame": 180,
-        "confidence": 0.95,
-        "group_count": 3,
-        "group_majority_count": 3
-    },
-    {
-        "loom": "004",
-        "Tuesday_Ngt": 39,
-        "Wednesday_Day": 32,
-        "frame": 240,
+        "Thursday_Day": 31,
+        "Wednesday_Ngt": 37,
+        "frame": 40,
         "confidence": 0.95,
         "group_count": 2,
         "group_majority_count": 2
     },
     {
-        "loom": "005",
-        "Tuesday_Ngt": 39,
-        "Wednesday_Day": 32,
-        "frame": 280,
+        "loom": "003",
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 37,
+        "frame": 80,
         "confidence": 0.95,
+        "group_count": 4,
+        "group_majority_count": 4
+    },
+    {
+        "loom": "004",
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 39,
+        "frame": 160,
+        "confidence": 0.95,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "005",
+        "Thursday_Day": 31,
+        "Wednesday_Ngt": 38,
+        "frame": 240,
+        "confidence": 0.8688,
         "group_count": 3,
         "group_majority_count": 3
     },
     {
         "loom": "006",
-        "Monday_Ngt": 40,
-        "Tuesday_Day": 33,
-        "Tuesday_Ngt": 40,
-        "Wednesday_Day": 33,
-        "frame": 340,
-        "confidence": 0.95,
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 39,
+        "frame": 300,
+        "confidence": 0.8899,
         "group_count": 3,
         "group_majority_count": 3
     },
     {
         "loom": "007",
-        "Tuesday_Ngt": 39,
-        "Wednesday_Day": 32,
-        "frame": 400,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 38,
+        "frame": 340,
+        "confidence": 0.9026,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "008",
-        "Tuesday_Ngt": 40,
-        "Wednesday_Day": 32,
-        "frame": 440,
-        "confidence": 0.95,
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 38,
+        "frame": 420,
+        "confidence": 0.8231,
         "group_count": 3,
         "group_majority_count": 3
     },
     {
         "loom": "009",
-        "Tuesday_Ngt": 37,
-        "Wednesday_Day": 31,
-        "frame": 500,
-        "confidence": 0.95,
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 33,
+        "frame": 460,
+        "confidence": 0.688,
         "group_count": 3,
         "group_majority_count": 3
     },
     {
         "loom": "010",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 32,
-        "frame": 560,
-        "confidence": 0.95,
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 37,
+        "frame": 580,
+        "confidence": 0.797,
         "group_count": 3,
         "group_majority_count": 3
     },
     {
         "loom": "011",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 30,
-        "frame": 620,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 36,
+        "frame": 640,
+        "confidence": 0.7247,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "012",
-        "Tuesday_Ngt": 36,
-        "Wednesday_Day": 31,
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 34,
         "frame": 660,
-        "confidence": 0.709,
-        "group_count": 1,
-        "group_majority_count": 1
-    },
-    {
-        "loom": "013",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 30,
-        "frame": 700,
-        "confidence": 0.9369,
-        "group_count": 4,
-        "group_majority_count": 4
-    },
-    {
-        "loom": "014",
-        "Tuesday_Ngt": 40,
-        "Wednesday_Day": 31,
-        "frame": 760,
-        "confidence": 0.95,
+        "confidence": 0.7873,
         "group_count": 2,
         "group_majority_count": 2
     },
     {
-        "loom": "015",
-        "Tuesday_Ngt": 36,
-        "Wednesday_Day": 29,
+        "loom": "013",
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 37,
+        "frame": 720,
+        "confidence": 0.7649,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "014",
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 37,
         "frame": 800,
-        "confidence": 0.95,
+        "confidence": 0.7488,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "018",
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 35,
+        "frame": 1020,
+        "confidence": 0.7412,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "015",
+        "Thursday_Day": 18,
+        "Wednesday_Ngt": 32,
+        "frame": 860,
+        "confidence": 0.8993,
         "group_count": 2,
         "group_majority_count": 2
     },
     {
         "loom": "016",
-        "Tuesday_Ngt": 39,
-        "Wednesday_Day": 32,
-        "frame": 840,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 38,
+        "frame": 880,
+        "confidence": 0.8057,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "017",
-        "Tuesday_Ngt": 37,
-        "Wednesday_Day": 31,
-        "frame": 880,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
-    },
-    {
-        "loom": "018",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 32,
-        "frame": 920,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 36,
+        "frame": 1000,
+        "confidence": 0.8517,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "019",
-        "Tuesday_Ngt": 39,
-        "Wednesday_Day": 33,
-        "frame": 960,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
+        "Thursday_Day": 18,
+        "Wednesday_Ngt": 29,
+        "frame": 1080,
+        "confidence": 0.9416,
+        "group_count": 3,
+        "group_majority_count": 3
     },
     {
         "loom": "020",
-        "Tuesday_Ngt": 38,
-        "Wednesday_Day": 30,
-        "frame": 1000,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
-    },
-    {
-        "loom": "021",
-        "Tuesday_Ngt": 37,
-        "Wednesday_Day": 32,
-        "frame": 1040,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
-    },
-    {
-        "loom": "022",
-        "Tuesday_Ngt": 40,
-        "Wednesday_Day": 31,
-        "frame": 1080,
-        "confidence": 0.95,
-        "group_count": 2,
-        "group_majority_count": 2
-    },
-    {
-        "loom": "023",
-        "Tuesday_Ngt": 37,
-        "Wednesday_Day": 31,
-        "frame": 1120,
-        "confidence": 0.95,
-        "group_count": 1,
-        "group_majority_count": 1
-    },
-    {
-        "loom": "024",
-        "Tuesday_Ngt": 39,
-        "Wednesday_Day": 32,
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 36,
         "frame": 1140,
         "confidence": 0.95,
         "group_count": 3,
         "group_majority_count": 3
+    },
+    {
+        "loom": "021",
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 38,
+        "frame": 1220,
+        "confidence": 0.8298,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "022",
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 38,
+        "frame": 1300,
+        "confidence": 0.8598,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "023",
+        "Thursday_Day": 32,
+        "Wednesday_Ngt": 38,
+        "frame": 1340,
+        "confidence": 0.8913,
+        "group_count": 3,
+        "group_majority_count": 3
+    },
+    {
+        "loom": "024",
+        "Thursday_Day": 33,
+        "Wednesday_Ngt": 39,
+        "frame": 1400,
+        "confidence": 0.6135,
+        "group_count": 2,
+        "group_majority_count": 2
     }
 ]

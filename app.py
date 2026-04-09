@@ -622,7 +622,6 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     VIDEO_PATH = video_path
     FRAME_SKIP = 20
     MAX_RETRIES = 3
-    LOOM_SWITCH_CONFIRMATION_FRAMES = int(os.getenv("LOOM_SWITCH_CONFIRMATION_FRAMES", "1"))
     MIN_MODEL_CONFIDENCE = float(os.getenv("MIN_MODEL_CONFIDENCE", "0.85"))
     MIN_LAPLACIAN_VARIANCE = float(os.getenv("MIN_LAPLACIAN_VARIANCE", "90.0"))
     MAX_MOTION_RATIO = float(os.getenv("MAX_MOTION_RATIO", "0.30"))
@@ -636,10 +635,10 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         raise RuntimeError("Cannot open video file")
 
     results = []
+    result_index_by_loom = {}
     frame_count = 0
     prev_gray = None
     current_group_rows = []
-    pending_switch_rows = []
 
     def _parse_confidence(raw_value) -> float:
         """Parses model confidence and normalizes it to 0.0..1.0."""
@@ -774,6 +773,49 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         final_row["group_majority_count"] = len(loom_rows)
 
         return final_row
+
+    def _row_rank(row: dict) -> tuple:
+        """Higher tuple means better representative row for the same loom."""
+        return (
+            int(row.get("group_majority_count") or 0),
+            int(row.get("group_count") or 0),
+            float(row.get("confidence") or 0.0),
+            int(row.get("frame") or 0),
+        )
+
+    def _commit_finalized_row(row: dict | None) -> None:
+        """Commit one finalized loom row while preventing repeated loom entries."""
+        if row is None:
+            return
+
+        loom_key = str(row.get("loom") or "").strip()
+        if not loom_key:
+            return
+
+        existing_index = result_index_by_loom.get(loom_key)
+        if existing_index is None:
+            results.append(row)
+            result_index_by_loom[loom_key] = len(results) - 1
+            print(
+                f"\n✅ GROUP SAVED: loom={loom_key} "
+                f"from {row.get('group_count', 0)} collected frames"
+            )
+            return
+
+        old_row = results[existing_index]
+        if _row_rank(row) > _row_rank(old_row):
+            results[existing_index] = row
+            print(
+                f"\n🔁 LOOM DEDUPE REPLACED: loom={loom_key} "
+                f"old_conf={float(old_row.get('confidence') or 0.0):.2f} -> "
+                f"new_conf={float(row.get('confidence') or 0.0):.2f}"
+            )
+        else:
+            print(
+                f"\n⚠ LOOM DEDUPE KEPT OLD: loom={loom_key} "
+                f"old_conf={float(old_row.get('confidence') or 0.0):.2f} >= "
+                f"new_conf={float(row.get('confidence') or 0.0):.2f}"
+            )
 
     prompt = """
 Read the industrial loom shift meter image.
@@ -1001,50 +1043,25 @@ Only JSON.
 
                 if not current_group_rows:
                     current_group_rows.append(row)
-                    pending_switch_rows = []
                     print(f"\n🧩 GROUP START: loom={loom_key}, frame={frame_count}")
                 else:
                     current_majority_loom = _majority_loom(current_group_rows) or loom_key
                     if loom_key == current_majority_loom:
-                        if pending_switch_rows:
-                            print(
-                                f"\n↩️ SWITCH CANCELED: candidate returned to current loom={current_majority_loom}. "
-                                f"Merging pending_count={len(pending_switch_rows)} back into current group."
-                            )
-                            current_group_rows.extend(pending_switch_rows)
-                            pending_switch_rows = []
                         current_group_rows.append(row)
                         print(
                             f"\n➕ GROUP APPEND: loom={loom_key}, frame={frame_count}, "
                             f"group_size={len(current_group_rows)}"
                         )
                     else:
-                        pending_switch_rows.append(row)
-                        pending_majority_loom = _majority_loom(pending_switch_rows) or loom_key
                         print(
-                            f"\n⏳ PENDING SWITCH: current={current_majority_loom}, candidate={loom_key}, "
-                            f"pending_majority={pending_majority_loom}, pending_count={len(pending_switch_rows)}"
+                            f"\n🔀 LOOM SWITCH DETECTED: previous={current_majority_loom}, next={loom_key}. "
+                            f"Finalizing previous loom immediately."
                         )
+                        finalized = _finalize_group_rows(current_group_rows)
+                        _commit_finalized_row(finalized)
 
-                        if (
-                            len(pending_switch_rows) >= LOOM_SWITCH_CONFIRMATION_FRAMES
-                            and pending_majority_loom
-                            and pending_majority_loom != current_majority_loom
-                        ):
-                            finalized = _finalize_group_rows(current_group_rows)
-                            if finalized is not None:
-                                results.append(finalized)
-                                print(
-                                    f"\n✅ GROUP SAVED: loom={finalized.get('loom')} "
-                                    f"from {len(current_group_rows)} collected frames"
-                                )
-
-                            current_group_rows = list(pending_switch_rows)
-                            pending_switch_rows = []
-                            print(
-                                f"\n🧩 NEW GROUP START: loom={_majority_loom(current_group_rows)}, "
-                                f"seed_count={len(current_group_rows)}"
-                            )
+                        current_group_rows = [row]
+                        print(f"\n🧩 NEW GROUP START: loom={loom_key}, seed_count=1")
 
                 success = True
 
@@ -1064,47 +1081,10 @@ Only JSON.
         if os.path.exists(filename):
             os.remove(filename)
 
-    # Finalize remaining buffered groups.
-    if pending_switch_rows:
-        if not current_group_rows:
-            current_group_rows = list(pending_switch_rows)
-            pending_switch_rows = []
-        else:
-            current_majority_loom = _majority_loom(current_group_rows)
-            pending_majority_loom = _majority_loom(pending_switch_rows)
-
-            if (
-                len(pending_switch_rows) >= LOOM_SWITCH_CONFIRMATION_FRAMES
-                and pending_majority_loom
-                and pending_majority_loom != current_majority_loom
-            ):
-                finalized = _finalize_group_rows(current_group_rows)
-                if finalized is not None:
-                    results.append(finalized)
-                    print(
-                        f"\n✅ GROUP SAVED: loom={finalized.get('loom')} "
-                        f"from {len(current_group_rows)} collected frames"
-                    )
-                current_group_rows = list(pending_switch_rows)
-                print(
-                    f"\n🧩 TAIL GROUP START: loom={_majority_loom(current_group_rows)}, "
-                    f"seed_count={len(current_group_rows)}"
-                )
-            else:
-                current_group_rows.extend(pending_switch_rows)
-                print(
-                    f"\nℹ️ TAIL MERGE: pending_count={len(pending_switch_rows)} merged into current group"
-                )
-            pending_switch_rows = []
-
+    # Finalize remaining buffered group.
     if current_group_rows:
         finalized = _finalize_group_rows(current_group_rows)
-        if finalized is not None:
-            results.append(finalized)
-            print(
-                f"\n✅ GROUP SAVED: loom={finalized.get('loom')} "
-                f"from {len(current_group_rows)} collected frames"
-            )
+        _commit_finalized_row(finalized)
 
     cap.release()
 
