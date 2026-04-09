@@ -1098,6 +1098,14 @@ Only JSON.
         finalized = _finalize_group_rows(current_group_rows)
         _commit_finalized_row(finalized)
 
+    def _loom_sort_key(row: dict):
+        loom_text = str((row or {}).get("loom") or "").strip()
+        if loom_text.isdigit():
+            return (0, int(loom_text), loom_text)
+        return (1, loom_text)
+
+    results = sorted(results, key=_loom_sort_key)
+
     cap.release()
 
     print("\nFINAL OUTPUT")
@@ -1193,6 +1201,14 @@ def _normalize_detected_rows(extracted_data: list, selected_shift: str) -> list[
                 "meters": int(detected_meters),
             }
         )
+
+    def _loom_sort_key(item: dict):
+        loom_text = str((item or {}).get("loom_number") or "").strip()
+        if loom_text.isdigit():
+            return (0, int(loom_text), loom_text)
+        return (1, loom_text)
+
+    response_rows.sort(key=_loom_sort_key)
 
     return response_rows
 
