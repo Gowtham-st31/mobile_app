@@ -916,7 +916,7 @@ Only JSON.
                 print(f"Sending to model... (try {retry_count + 1})")
 
                 response = client.models.generate_content(
-                    model="gemma-3-4b-it",
+                    model="gemma-3-27b-it",
                     contents=[
                         prompt,
                         genai.types.Part.from_bytes(
@@ -969,7 +969,7 @@ Only JSON.
 """
 
                     fallback_response = client.models.generate_content(
-                        model="gemma-3-4b-it",
+                        model="gemma-3-27b-it",
                         contents=[
                             fallback_prompt,
                             genai.types.Part.from_bytes(
