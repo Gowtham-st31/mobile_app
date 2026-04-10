@@ -572,7 +572,7 @@ def call_gemini_text(
 round_tracker = {}
 
 
-def custom_shift_round(value_str, day_label, shift_label, loom_label=None, tracker=None):
+def custom_shift_round(value_str, day_label, shift_label, loom_label=None, tracker=None, force_half_up=None):
     # Use Decimal so .5 ties are detected reliably (float math can miss exact 0.5).
     from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
@@ -601,6 +601,9 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
         return whole
 
     else:
+        if force_half_up is not None:
+            return whole + 1 if bool(force_half_up) else whole
+
         # Alternate exact/near .5 ties: low, high, low, high ... per key.
         next_up = bool(state.get(key, False))
         result = whole + 1 if next_up else whole
@@ -620,6 +623,8 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     global round_tracker
     round_tracker = {}
     local_round_tracker = {}
+    loom_half_mode_by_loom = {}
+    next_new_loom_half_up = False  # first loom tie -> down
 
     # ===== CONFIG =====
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
@@ -726,6 +731,22 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         best_vote = max(votes.keys(), key=lambda k: (votes[k], weights[k]))
         return sample_value[best_vote], int(votes[best_vote]), int(sum(votes.values()))
 
+    def _get_loom_half_mode(loom_key: str) -> bool:
+        """Assign .5 tie mode per loom: first down, second up, then alternate by loom."""
+        nonlocal next_new_loom_half_up
+
+        lk = str(loom_key or "").strip()
+        if not lk:
+            return False
+
+        if lk not in loom_half_mode_by_loom:
+            loom_half_mode_by_loom[lk] = next_new_loom_half_up
+            mode_text = "UP" if next_new_loom_half_up else "DOWN"
+            print(f"\n🔢 HALF-TIE MODE ASSIGNED: loom={lk}, mode={mode_text}")
+            next_new_loom_half_up = not next_new_loom_half_up
+
+        return bool(loom_half_mode_by_loom[lk])
+
     def _finalize_group_rows(group_rows: list[dict]) -> dict | None:
         if not group_rows:
             return None
@@ -739,6 +760,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
             return None
 
         print(f"\n🧮 FINALIZING GROUP: loom={group_loom}, candidates={len(group_rows)}, matching_loom={len(loom_rows)}")
+        loom_half_up_mode = _get_loom_half_mode(group_loom)
 
         final_row = {"loom": group_loom}
         keys = set()
@@ -775,6 +797,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
                     shift_label,
                     loom_label=final_row.get("loom"),
                     tracker=local_round_tracker,
+                    force_half_up=loom_half_up_mode,
                 )
 
         best_src = max(loom_rows, key=lambda r: float(r.get("confidence") or 0.0))
