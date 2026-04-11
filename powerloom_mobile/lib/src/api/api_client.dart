@@ -200,6 +200,50 @@ class ApiClient {
     required String shift,
   }) async {
     try {
+      String _resolveFrameImageUrl(String raw) {
+        final value = raw.trim();
+        if (value.isEmpty) return '';
+
+        final parsed = Uri.tryParse(value);
+        if (parsed != null && parsed.hasScheme) {
+          return value;
+        }
+
+        final base = Uri.parse(
+          _dio.options.baseUrl.endsWith('/')
+              ? _dio.options.baseUrl
+              : '${_dio.options.baseUrl}/',
+        );
+
+        final relative = value.startsWith('/') ? value.substring(1) : value;
+        return base.resolve(relative).toString();
+      }
+
+      Map<String, dynamic> _toRowPayload({
+        required dynamic loom,
+        required dynamic meters,
+        required Map<String, dynamic> source,
+      }) {
+        final row = <String, dynamic>{
+          'loom_number': loom,
+          'meters': meters,
+        };
+
+        final frameImageUrl = _resolveFrameImageUrl(
+          (source['frame_image_url'] ?? source['frame_url'] ?? '').toString(),
+        );
+        final frameImageToken = (source['frame_image_token'] ?? source['frame_image_name'] ?? '').toString().trim();
+
+        if (frameImageUrl.isNotEmpty) {
+          row['frame_image_url'] = frameImageUrl;
+        }
+        if (frameImageToken.isNotEmpty) {
+          row['frame_image_token'] = frameImageToken;
+        }
+
+        return row;
+      }
+
       final fileSizeBytes = await videoFile.length();
       if (fileSizeBytes <= 0) {
         throw const ApiException('Selected video file is empty. Please choose a valid video.');
@@ -255,7 +299,7 @@ class ApiClient {
         final singleLoom = data['loom_number'] ?? data['loom'];
         final singleMeters = data['meters'] ?? data['meter'];
         if (singleLoom != null && singleMeters != null) {
-          rows.add({'loom_number': singleLoom, 'meters': singleMeters});
+          rows.add(_toRowPayload(loom: singleLoom, meters: singleMeters, source: data));
         }
         return rows;
       }
@@ -268,7 +312,7 @@ class ApiClient {
           if (loom == null || meters == null) {
             continue;
           }
-          rows.add({'loom_number': loom, 'meters': meters});
+          rows.add(_toRowPayload(loom: loom, meters: meters, source: cast));
         }
       }
 
@@ -276,7 +320,7 @@ class ApiClient {
         final singleLoom = data['loom_number'] ?? data['loom'];
         final singleMeters = data['meters'] ?? data['meter'];
         if (singleLoom != null && singleMeters != null) {
-          rows.add({'loom_number': singleLoom, 'meters': singleMeters});
+          rows.add(_toRowPayload(loom: singleLoom, meters: singleMeters, source: data));
         }
       }
 

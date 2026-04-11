@@ -1660,17 +1660,25 @@
             rowNodes.forEach((tr) => {
                 const loomInput = tr.querySelector('input[data-field="loom_number"]');
                 const metersInput = tr.querySelector('input[data-field="meters"]');
+                const frameTokenInput = tr.querySelector('input[data-field="frame_image_token"]');
                 const loomNumber = loomInput ? loomInput.value.trim() : '';
                 const metersValue = metersInput ? metersInput.value.trim() : '';
+                const frameToken = frameTokenInput ? frameTokenInput.value.trim() : '';
 
                 if (!loomNumber || metersValue === '') {
                     return;
                 }
 
-                rows.push({
+                const payload = {
                     loom_number: loomNumber,
                     meters: Number(metersValue),
-                });
+                };
+
+                if (frameToken) {
+                    payload.frame_image_token = frameToken;
+                }
+
+                rows.push(payload);
             });
 
             if (rows.length > 0) {
@@ -1703,7 +1711,7 @@
 
             const thead = document.createElement('thead');
             const headRow = document.createElement('tr');
-            ['#', 'Loom Number', 'Meters'].forEach(label => {
+            ['#', 'Frame', 'Loom Number', 'Meters'].forEach(label => {
                 const th = document.createElement('th');
                 th.className = 'px-4 py-3 text-left text-xs font-bold uppercase tracking-wider';
                 th.textContent = label;
@@ -1721,6 +1729,32 @@
                 indexCell.className = 'px-4 py-2.5 text-sm font-medium';
                 indexCell.textContent = String(index + 1);
                 tr.appendChild(indexCell);
+
+                const frameCell = document.createElement('td');
+                frameCell.className = 'px-4 py-2.5';
+                const frameUrl = String(row.frame_image_url ?? row.frame_url ?? '').trim();
+                const frameToken = String(row.frame_image_token ?? row.frame_image_name ?? '').trim();
+
+                if (frameUrl) {
+                    const frameImg = document.createElement('img');
+                    frameImg.src = frameUrl;
+                    frameImg.alt = `Detected frame ${index + 1}`;
+                    frameImg.className = 'w-44 h-28 object-cover rounded-md border border-white/20';
+                    frameImg.loading = 'lazy';
+                    frameCell.appendChild(frameImg);
+                } else {
+                    const noFrame = document.createElement('span');
+                    noFrame.className = 'text-xs text-gray-500';
+                    noFrame.textContent = 'No frame';
+                    frameCell.appendChild(noFrame);
+                }
+
+                const frameTokenInput = document.createElement('input');
+                frameTokenInput.type = 'hidden';
+                frameTokenInput.dataset.field = 'frame_image_token';
+                frameTokenInput.value = frameToken;
+                frameCell.appendChild(frameTokenInput);
+                tr.appendChild(frameCell);
 
                 const loomCell = document.createElement('td');
                 loomCell.className = 'px-4 py-2.5';

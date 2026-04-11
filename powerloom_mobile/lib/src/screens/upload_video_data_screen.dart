@@ -294,6 +294,8 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     for (final row in rows) {
       final loomRaw = (row['loom_number'] ?? row['loom'] ?? '').toString();
       final metersRaw = row['meters'] ?? row['meter'];
+      final frameImageUrl = (row['frame_image_url'] ?? row['frame_url'] ?? '').toString().trim();
+      final frameImageToken = (row['frame_image_token'] ?? row['frame_image_name'] ?? '').toString().trim();
 
       final loom = _normalizeLoomNumber(loomRaw);
       final meters = _parseMetersValue(metersRaw);
@@ -301,7 +303,14 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
         continue;
       }
 
-      normalizedRows.add(_DetectedRowEditor(loomNumber: loom, meters: meters));
+      normalizedRows.add(
+        _DetectedRowEditor(
+          loomNumber: loom,
+          meters: meters,
+          frameImageUrl: frameImageUrl.isEmpty ? null : frameImageUrl,
+          frameImageToken: frameImageToken.isEmpty ? null : frameImageToken,
+        ),
+      );
     }
 
     if (normalizedRows.isEmpty) {
@@ -382,14 +391,27 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       if (loom.isEmpty || meters == null) {
         throw const FormatException('Each detected row needs valid loom number and meters.');
       }
-      rows.add({'loom_number': loom, 'meters': meters});
+      final payload = <String, dynamic>{
+        'loom_number': loom,
+        'meters': meters,
+      };
+      final token = row.frameImageToken?.trim() ?? '';
+      if (token.isNotEmpty) {
+        payload['frame_image_token'] = token;
+      }
+      rows.add(payload);
     }
 
     if (rows.isNotEmpty) {
       final firstLoom = _normalizeLoomNumber(_loomController.text);
       final firstMeters = int.tryParse(_metersController.text.trim());
       if (firstLoom.isNotEmpty && firstMeters != null) {
-        rows[0] = {'loom_number': firstLoom, 'meters': firstMeters};
+        final token = rows[0]['frame_image_token'];
+        rows[0] = {
+          'loom_number': firstLoom,
+          'meters': firstMeters,
+          if (token != null && token.toString().trim().isNotEmpty) 'frame_image_token': token,
+        };
       }
     }
 
@@ -632,6 +654,39 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                                 child: Text('Row ${index + 1}', style: Theme.of(context).textTheme.labelLarge),
                               ),
                               const SizedBox(height: 8),
+                              if ((row.frameImageUrl ?? '').isNotEmpty) ...[
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: AspectRatio(
+                                    aspectRatio: 16 / 9,
+                                    child: Image.network(
+                                      row.frameImageUrl!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) => Container(
+                                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                        alignment: Alignment.center,
+                                        child: Text(
+                                          'Unable to load frame image',
+                                          style: Theme.of(context).textTheme.bodySmall,
+                                        ),
+                                      ),
+                                      loadingBuilder: (context, child, progress) {
+                                        if (progress == null) return child;
+                                        return Container(
+                                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                          alignment: Alignment.center,
+                                          child: const SizedBox(
+                                            height: 22,
+                                            width: 22,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                              ],
                               TextFormField(
                                 controller: row.loomController,
                                 decoration: const InputDecoration(labelText: 'Loom Number'),
@@ -671,8 +726,15 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
 class _DetectedRowEditor {
   final TextEditingController loomController;
   final TextEditingController metersController;
+  final String? frameImageUrl;
+  final String? frameImageToken;
 
-  _DetectedRowEditor({required String loomNumber, required int meters})
+  _DetectedRowEditor({
+    required String loomNumber,
+    required int meters,
+    this.frameImageUrl,
+    this.frameImageToken,
+  })
       : loomController = TextEditingController(text: loomNumber),
         metersController = TextEditingController(text: meters.toString());
 

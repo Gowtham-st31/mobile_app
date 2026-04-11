@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 
 # Optional local dev support: load environment variables from a .env file.
 # In production, prefer real environment variables (Render/Heroku/etc.).
@@ -76,6 +77,22 @@ except Exception:
 
 # Configure logging to show debug messages
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+class _HideDetectedFrameAccessLogs(logging.Filter):
+    """Suppress noisy access log lines that include detected frame static paths."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage().replace("\\", "/")
+        except Exception:
+            return True
+        return "/static/detected_frames/" not in message
+
+
+_werkzeug_logger = logging.getLogger("werkzeug")
+if not any(isinstance(f, _HideDetectedFrameAccessLogs) for f in _werkzeug_logger.filters):
+    _werkzeug_logger.addFilter(_HideDetectedFrameAccessLogs())
 
 
 MONGO_URI = os.getenv("MONGO_URI")
@@ -177,6 +194,14 @@ def _int_env(name: str, default: int) -> int:
         return int(str(raw).strip())
     except Exception:
         return default
+
+
+DETECTION_FRAME_DIR = os.path.join(app.root_path, "static", "detected_frames")
+os.makedirs(DETECTION_FRAME_DIR, exist_ok=True)
+
+# Auto-delete frame images even when the user does not submit.
+DETECTED_FRAME_TTL_SECONDS = max(0, _int_env("DETECTED_FRAME_TTL_SECONDS", 900))
+DETECTED_FRAME_CLEANUP_INTERVAL_SECONDS = max(30, _int_env("DETECTED_FRAME_CLEANUP_INTERVAL_SECONDS", 60))
 
 
 def _parse_loom_numbers(raw: str | None) -> list[str] | None:
@@ -615,6 +640,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     import time
     import os
     from collections import Counter, defaultdict
+    from uuid import uuid4
     from google import genai
 
     global round_tracker
@@ -631,13 +657,38 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     MIN_MODEL_CONFIDENCE = float(os.getenv("MIN_MODEL_CONFIDENCE", "0.85"))
     MIN_LAPLACIAN_VARIANCE = float(os.getenv("MIN_LAPLACIAN_VARIANCE", "90.0"))
     MAX_MOTION_RATIO = float(os.getenv("MAX_MOTION_RATIO", "0.30"))
+    VERBOSE_DETECT_LOGS = str(os.getenv("VIDEO_DETECT_VERBOSE_LOGS", "1")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    DETECT_FRAME_DIR = DETECTION_FRAME_DIR
+
+    def _detect_log(*args, **kwargs):
+        if VERBOSE_DETECT_LOGS:
+            print(*args, **kwargs)
+
+    def _sanitize_detect_log_data(value):
+        """Removes frame URL/path style fields from terminal logs."""
+        if isinstance(value, dict):
+            sanitized = {}
+            for key, item in value.items():
+                key_text = str(key).strip().lower()
+                if key_text in {"frame_image_name", "frame_image_url", "frame_image_token", "frame_url", "__frame_bytes"}:
+                    continue
+                sanitized[key] = _sanitize_detect_log_data(item)
+            return sanitized
+        if isinstance(value, list):
+            return [_sanitize_detect_log_data(item) for item in value]
+        return value
 
     client = genai.Client(api_key=api_key)
 
     cap = cv2.VideoCapture(VIDEO_PATH)
 
     if not cap.isOpened():
-        print("Cannot open video file")
+        _detect_log("Cannot open video file")
         raise RuntimeError("Cannot open video file")
 
     results = []
@@ -738,13 +789,13 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         if not loom_rows:
             return None
 
-        print(f"\n🧮 FINALIZING GROUP: loom={group_loom}, candidates={len(group_rows)}, matching_loom={len(loom_rows)}")
+        _detect_log(f"\n🧮 FINALIZING GROUP: loom={group_loom}, candidates={len(group_rows)}, matching_loom={len(loom_rows)}")
 
         final_row = {"loom": group_loom}
         keys = set()
         for r in loom_rows:
             for k in r.keys():
-                if k in {"loom", "confidence", "frame"}:
+                if k in {"loom", "confidence", "frame"} or str(k).startswith("__"):
                     continue
                 keys.add(k)
 
@@ -753,7 +804,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
             if selected_value is None:
                 continue
             final_row[key] = selected_value
-            print(f"  • {key}: {selected_value} (votes {vote_count}/{total_votes})")
+            _detect_log(f"  • {key}: {selected_value} (votes {vote_count}/{total_votes})")
 
         # Round only once on finalized values (after majority vote), not per frame.
         # This prevents .5 alternation from polluting per-frame majority counts.
@@ -784,6 +835,20 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         final_row["group_count"] = len(group_rows)
         final_row["group_majority_count"] = len(loom_rows)
 
+        frame_bytes = best_src.get("__frame_bytes")
+        if isinstance(frame_bytes, (bytes, bytearray)) and frame_bytes:
+            frame_name = f"{uuid4().hex}.jpg"
+            frame_path = os.path.join(DETECT_FRAME_DIR, frame_name)
+            try:
+                with open(frame_path, "wb") as image_file:
+                    image_file.write(bytes(frame_bytes))
+                final_row["frame_image_name"] = frame_name
+            except Exception:
+                app.logger.warning(
+                    "Failed to save detected frame image for loom %s.",
+                    group_loom,
+                )
+
         return final_row
 
     def _row_rank(row: dict) -> tuple:
@@ -808,7 +873,7 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         if existing_index is None:
             results.append(row)
             result_index_by_loom[loom_key] = len(results) - 1
-            print(
+            _detect_log(
                 f"\n✅ GROUP SAVED: loom={loom_key} "
                 f"from {row.get('group_count', 0)} collected frames"
             )
@@ -817,13 +882,13 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
         old_row = results[existing_index]
         if _row_rank(row) > _row_rank(old_row):
             results[existing_index] = row
-            print(
+            _detect_log(
                 f"\n🔁 LOOM DEDUPE REPLACED: loom={loom_key} "
                 f"old_conf={float(old_row.get('confidence') or 0.0):.2f} -> "
                 f"new_conf={float(row.get('confidence') or 0.0):.2f}"
             )
         else:
-            print(
+            _detect_log(
                 f"\n⚠ LOOM DEDUPE KEPT OLD: loom={loom_key} "
                 f"old_conf={float(old_row.get('confidence') or 0.0):.2f} >= "
                 f"new_conf={float(row.get('confidence') or 0.0):.2f}"
@@ -859,7 +924,7 @@ No markdown.
 Only JSON.
 """
 
-    print("Started processing...\n")
+    _detect_log("Started processing...\n")
 
     while True:
         ret, frame = cap.read()
@@ -871,13 +936,13 @@ Only JSON.
         if frame_count % FRAME_SKIP != 0:
             continue
 
-        print(f"\n{'='*50}")
-        print(f"PROCESSING FRAME: {frame_count}")
-        print(f"{'='*50}")
+        _detect_log(f"\n{'='*50}")
+        _detect_log(f"PROCESSING FRAME: {frame_count}")
+        _detect_log(f"{'='*50}")
 
         current_gray, lap_var, motion_ratio = _frame_quality_metrics(frame, prev_gray)
         prev_gray = current_gray
-        print(
+        _detect_log(
             f"FRAME QUALITY: lap_var={lap_var:.2f} motion_ratio={motion_ratio:.3f} "
             f"(min_lap={MIN_LAPLACIAN_VARIANCE:.2f}, max_motion={MAX_MOTION_RATIO:.3f})"
         )
@@ -888,7 +953,7 @@ Only JSON.
             # Do not drop the frame; reduce its weight so loom sections are not missed.
             blur_ratio = lap_var / max(MIN_LAPLACIAN_VARIANCE, 1e-6)
             quality_penalty *= max(0.20, min(1.0, blur_ratio))
-            print(
+            _detect_log(
                 f"\n⚠ LOW QUALITY FRAME {frame_count}: blur detected "
                 f"(lap_var={lap_var:.2f} < {MIN_LAPLACIAN_VARIANCE:.2f}); penalty={quality_penalty:.2f}"
             )
@@ -897,7 +962,7 @@ Only JSON.
             # Do not drop the frame; reduce its weight so loom sections are not missed.
             motion_over = min(1.0, (motion_ratio - MAX_MOTION_RATIO) / max(MAX_MOTION_RATIO, 1e-6))
             quality_penalty *= max(0.20, 1.0 - motion_over)
-            print(
+            _detect_log(
                 f"\n⚠ LOW QUALITY FRAME {frame_count}: shake detected "
                 f"(motion_ratio={motion_ratio:.3f} > {MAX_MOTION_RATIO:.3f}); penalty={quality_penalty:.2f}"
             )
@@ -913,7 +978,7 @@ Only JSON.
 
         while not success and retry_count < MAX_RETRIES:
             try:
-                print(f"Sending to model... (try {retry_count + 1})")
+                _detect_log(f"Sending to model... (try {retry_count + 1})")
 
                 response = client.models.generate_content(
                     model="gemma-3-27b-it",
@@ -928,10 +993,10 @@ Only JSON.
 
                 text = response.text.strip()
 
-                print("\nRAW OUTPUT:")
-                print("-" * 50)
-                print(text)
-                print("-" * 50)
+                _detect_log("\nRAW OUTPUT:")
+                _detect_log("-" * 50)
+                _detect_log(text)
+                _detect_log("-" * 50)
 
                 match = re.search(r'\{.*?\}', text, re.DOTALL)
 
@@ -940,8 +1005,8 @@ Only JSON.
 
                 json_text = match.group(0)
 
-                print("\nJSON BLOCK:")
-                print(json_text)
+                _detect_log("\nJSON BLOCK:")
+                _detect_log(json_text)
 
                 raw_row = json.loads(json_text)
                 if not isinstance(raw_row, dict):
@@ -952,7 +1017,7 @@ Only JSON.
                 reject_text = str(reject_flag).strip().lower()
                 if reject_flag is True or reject_text in {"true", "1", "yes"}:
                     reason = str(raw_row.get("reason") or "rejected_by_model").strip()
-                    print(f"\n⚠ MODEL REJECTED FRAME {frame_count}: {reason}. Requesting forced best-effort output...")
+                    _detect_log(f"\n⚠ MODEL REJECTED FRAME {frame_count}: {reason}. Requesting forced best-effort output...")
 
                     fallback_prompt = """
 Read the industrial loom shift meter image.
@@ -980,10 +1045,10 @@ Only JSON.
                     )
 
                     fallback_text = (fallback_response.text or "").strip()
-                    print("\nFALLBACK RAW OUTPUT:")
-                    print("-" * 50)
-                    print(fallback_text)
-                    print("-" * 50)
+                    _detect_log("\nFALLBACK RAW OUTPUT:")
+                    _detect_log("-" * 50)
+                    _detect_log(fallback_text)
+                    _detect_log("-" * 50)
 
                     fallback_match = re.search(r'\{.*?\}', fallback_text, re.DOTALL)
                     if not fallback_match:
@@ -1011,8 +1076,8 @@ Only JSON.
                     else:
                         row[clean_key] = value
 
-                print("\nNORMALIZED JSON:")
-                print(row)
+                _detect_log("\nNORMALIZED JSON:")
+                _detect_log(row)
 
                 loom_value = str(row.get("loom") or "").strip()
                 if not loom_value:
@@ -1022,13 +1087,13 @@ Only JSON.
                 model_confidence = _parse_confidence(row.get("confidence"))
                 frame_confidence = max(0.0, min(1.0, model_confidence * quality_penalty))
                 row["confidence"] = round(frame_confidence, 4)
-                print(
+                _detect_log(
                     f"\nFRAME CONFIDENCE: model={model_confidence:.2f}, "
                     f"quality_penalty={quality_penalty:.2f}, effective={frame_confidence:.2f}"
                 )
 
                 if model_confidence < MIN_MODEL_CONFIDENCE:
-                    print(
+                    _detect_log(
                         f"\n⚠ LOW MODEL CONFIDENCE FRAME {frame_count}: "
                         f"model={model_confidence:.2f} < threshold={MIN_MODEL_CONFIDENCE:.2f}. "
                         f"Keeping frame with reduced effective confidence={frame_confidence:.2f}"
@@ -1046,8 +1111,11 @@ Only JSON.
                     except Exception:
                         row[key] = str(value).strip()
 
-                print("\nCANDIDATE JSON (UNROUNDED):")
-                print(row)
+                # Keep frame bytes only in-memory for selecting one best frame per loom group.
+                row["__frame_bytes"] = image_bytes
+
+                _detect_log("\nCANDIDATE JSON (UNROUNDED):")
+                _detect_log(_sanitize_detect_log_data(row))
 
                 # ===== GROUP BUFFERING (do not save per frame) =====
                 row["frame"] = frame_count
@@ -1055,17 +1123,17 @@ Only JSON.
 
                 if not current_group_rows:
                     current_group_rows.append(row)
-                    print(f"\n🧩 GROUP START: loom={loom_key}, frame={frame_count}")
+                    _detect_log(f"\n🧩 GROUP START: loom={loom_key}, frame={frame_count}")
                 else:
                     current_majority_loom = _majority_loom(current_group_rows) or loom_key
                     if loom_key == current_majority_loom:
                         current_group_rows.append(row)
-                        print(
+                        _detect_log(
                             f"\n➕ GROUP APPEND: loom={loom_key}, frame={frame_count}, "
                             f"group_size={len(current_group_rows)}"
                         )
                     else:
-                        print(
+                        _detect_log(
                             f"\n🔀 LOOM SWITCH DETECTED: previous={current_majority_loom}, next={loom_key}. "
                             f"Finalizing previous loom immediately."
                         )
@@ -1073,7 +1141,7 @@ Only JSON.
                         _commit_finalized_row(finalized)
 
                         current_group_rows = [row]
-                        print(f"\n🧩 NEW GROUP START: loom={loom_key}, seed_count=1")
+                        _detect_log(f"\n🧩 NEW GROUP START: loom={loom_key}, seed_count=1")
 
                 success = True
 
@@ -1081,12 +1149,12 @@ Only JSON.
                 retry_count += 1
                 wait_time = retry_count * 10
 
-                print(f"\n❌ ERROR: {e}")
-                print(f"⏳ Waiting {wait_time} sec before retrying same frame {frame_count}...")
+                _detect_log(f"\n❌ ERROR: {e}")
+                _detect_log(f"⏳ Waiting {wait_time} sec before retrying same frame {frame_count}...")
                 time.sleep(wait_time)
 
         if not success:
-            print(f"\n⛔ FAILED FRAME {frame_count}")
+            _detect_log(f"\n⛔ FAILED FRAME {frame_count}")
 
         time.sleep(1)
 
@@ -1108,14 +1176,14 @@ Only JSON.
 
     cap.release()
 
-    print("\nFINAL OUTPUT")
-    print("=" * 50)
-    print(json.dumps(results, indent=4))
+    _detect_log("\nFINAL OUTPUT")
+    _detect_log("=" * 50)
+    _detect_log(json.dumps(_sanitize_detect_log_data(results), indent=4))
 
     with open("unique_loom_output.json", "w") as f:
         json.dump(results, f, indent=4)
 
-    print("\nSaved as unique_loom_output.json")
+    _detect_log("\nSaved as unique_loom_output.json")
     return results
 
 
@@ -1195,12 +1263,16 @@ def _normalize_detected_rows(extracted_data: list, selected_shift: str) -> list[
         if not loom_number:
             continue
 
-        response_rows.append(
-            {
-                "loom_number": loom_number,
-                "meters": int(detected_meters),
-            }
-        )
+        row_payload = {
+            "loom_number": loom_number,
+            "meters": int(detected_meters),
+        }
+
+        frame_image_name = str(row.get("frame_image_name") or "").strip()
+        if frame_image_name:
+            row_payload["frame_image_name"] = frame_image_name
+
+        response_rows.append(row_payload)
 
     def _loom_sort_key(item: dict):
         loom_text = str((item or {}).get("loom_number") or "").strip()
@@ -1211,6 +1283,119 @@ def _normalize_detected_rows(extracted_data: list, selected_shift: str) -> list[
     response_rows.sort(key=_loom_sort_key)
 
     return response_rows
+
+
+def _delete_detection_frame_files(rows: list) -> int:
+    """Deletes detected frame images referenced in submitted rows."""
+    frame_dir = DETECTION_FRAME_DIR
+    removed_count = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        token = str(row.get("frame_image_token") or row.get("frame_image_name") or "").strip()
+        if not token:
+            continue
+
+        safe_name = os.path.basename(token)
+        if safe_name != token:
+            continue
+
+        frame_path = os.path.join(frame_dir, safe_name)
+        if not os.path.isfile(frame_path):
+            continue
+
+        try:
+            os.remove(frame_path)
+            removed_count += 1
+        except Exception:
+            app.logger.warning("Failed to remove a submitted detected frame image.")
+
+    return removed_count
+
+
+def _cleanup_stale_detection_frame_files(max_age_seconds: int | None = None) -> int:
+    """Deletes stale detected frame images that were never submitted."""
+    if DETECTED_FRAME_TTL_SECONDS <= 0:
+        return 0
+
+    ttl_seconds = max_age_seconds if isinstance(max_age_seconds, int) and max_age_seconds > 0 else DETECTED_FRAME_TTL_SECONDS
+    now_ts = time.time()
+    removed_count = 0
+
+    if not os.path.isdir(DETECTION_FRAME_DIR):
+        return 0
+
+    try:
+        entries = list(os.scandir(DETECTION_FRAME_DIR))
+    except Exception:
+        app.logger.warning("Failed to scan detected frame directory for cleanup.")
+        return 0
+
+    for entry in entries:
+        try:
+            if not entry.is_file():
+                continue
+
+            name = entry.name.lower()
+            if not name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+
+            age_seconds = now_ts - float(entry.stat().st_mtime)
+            if age_seconds < ttl_seconds:
+                continue
+
+            os.remove(entry.path)
+            removed_count += 1
+        except FileNotFoundError:
+            continue
+        except Exception:
+            app.logger.warning("Failed to remove an expired detected frame image.")
+
+    return removed_count
+
+
+_detection_frame_cleanup_started = False
+_detection_frame_cleanup_lock = threading.Lock()
+
+
+def _start_detection_frame_cleanup_worker() -> None:
+    """Starts a background worker that periodically removes expired detected frame images."""
+    global _detection_frame_cleanup_started
+
+    if DETECTED_FRAME_TTL_SECONDS <= 0:
+        return
+
+    with _detection_frame_cleanup_lock:
+        if _detection_frame_cleanup_started:
+            return
+        _detection_frame_cleanup_started = True
+
+    def _cleanup_loop() -> None:
+        while True:
+            try:
+                removed = _cleanup_stale_detection_frame_files()
+                if removed:
+                    app.logger.info("Auto-cleaned %s expired detected frame image(s).", removed)
+            except Exception as exc:
+                app.logger.warning("Detected frame cleanup worker error: %s", exc)
+            time.sleep(DETECTED_FRAME_CLEANUP_INTERVAL_SECONDS)
+
+    worker = threading.Thread(
+        target=_cleanup_loop,
+        name="detected-frame-cleanup-worker",
+        daemon=True,
+    )
+    worker.start()
+    app.logger.info(
+        "Detected frame cleanup worker started (ttl=%ss, interval=%ss).",
+        DETECTED_FRAME_TTL_SECONDS,
+        DETECTED_FRAME_CLEANUP_INTERVAL_SECONDS,
+    )
+
+
+_start_detection_frame_cleanup_worker()
 
 
 def _build_video_bulk_docs(
@@ -2040,6 +2225,13 @@ def detect_video_data():
         if not response_rows:
             return jsonify({'status': 'error', 'message': 'Could not detect loom rows from video.'}), 422
 
+        for row in response_rows:
+            frame_image_name = str(row.get('frame_image_name') or '').strip()
+            if not frame_image_name:
+                continue
+            row['frame_image_token'] = frame_image_name
+            row['frame_image_url'] = url_for('static', filename=f'detected_frames/{frame_image_name}', _external=False)
+
         return jsonify({
             'status': 'success',
             'loom_number': response_rows[0]['loom_number'],
@@ -2129,13 +2321,20 @@ def add_video_form_bulk(client, db, loom_collection, users_collection, warp_data
 
     insert_result = loom_collection.insert_many(docs_to_insert)
     inserted_count = len(insert_result.inserted_ids)
+    removed_frame_images = _delete_detection_frame_files(rows)
 
     try:
         socketio.emit('new_loom_data', {'message': 'New loom data added!', 'count': inserted_count})
     except Exception:
         pass
 
-    return jsonify({'status': 'success', 'inserted_count': inserted_count}), 200
+    return jsonify(
+        {
+            'status': 'success',
+            'inserted_count': inserted_count,
+            'removed_frame_images': removed_frame_images,
+        }
+    ), 200
 
 @app.route("/add_form", methods=["POST"])
 @login_required
