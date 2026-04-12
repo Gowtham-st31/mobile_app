@@ -43,6 +43,7 @@ import re
 import tempfile
 import pytz
 import os.path
+from uuid import uuid4
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, send_from_directory
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from pymongo import MongoClient
@@ -202,6 +203,11 @@ os.makedirs(DETECTION_FRAME_DIR, exist_ok=True)
 # Auto-delete frame images even when the user does not submit.
 DETECTED_FRAME_TTL_SECONDS = max(0, _int_env("DETECTED_FRAME_TTL_SECONDS", 900))
 DETECTED_FRAME_CLEANUP_INTERVAL_SECONDS = max(30, _int_env("DETECTED_FRAME_CLEANUP_INTERVAL_SECONDS", 60))
+
+# Video detection progress jobs (used by website/mobile polling).
+DETECTION_JOB_TTL_SECONDS = max(300, _int_env("DETECTION_JOB_TTL_SECONDS", 3600))
+DETECTION_PROGRESS_JOBS: dict[str, dict] = {}
+DETECTION_PROGRESS_JOBS_LOCK = threading.Lock()
 
 
 def _parse_loom_numbers(raw: str | None) -> list[str] | None:
@@ -504,7 +510,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 # --- AI (Gemini) configuration ---
 # Default model: Gemma 3 4B IT (instruction-tuned chat).
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemma-3-4b-it").strip() or "gemma-3-4b-it"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemma-3-27b-it").strip() or "gemma-3-27b-it"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # Conservative defaults to avoid token/context blowups.
@@ -633,14 +639,13 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
         return result
 
 
-def extract_loom_data_from_video(video_path: str) -> list[dict]:
+def extract_loom_data_from_video(video_path: str, progress_callback=None) -> list[dict]:
     import cv2
     import json
     import re
     import time
     import os
     from collections import Counter, defaultdict
-    from uuid import uuid4
     from google import genai
 
     global round_tracker
@@ -690,6 +695,30 @@ def extract_loom_data_from_video(video_path: str) -> list[dict]:
     if not cap.isOpened():
         _detect_log("Cannot open video file")
         raise RuntimeError("Cannot open video file")
+
+    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    total_detect_frames = total_video_frames // FRAME_SKIP
+    if total_video_frames % FRAME_SKIP != 0:
+        total_detect_frames += 1
+    total_detect_frames = max(1, total_detect_frames)
+    processed_detect_frames = 0
+
+    def _emit_detect_progress(processed: int, total: int, force_percent: int | None = None):
+        if progress_callback is None:
+            return
+
+        try:
+            if force_percent is None:
+                percent = int(round((max(0, processed) / max(1, total)) * 100))
+            else:
+                percent = int(force_percent)
+            percent = max(0, min(100, percent))
+            progress_callback(max(0, processed), max(1, total), percent)
+        except Exception:
+            # Progress emission must never break detection.
+            pass
+
+    _emit_detect_progress(0, total_detect_frames, force_percent=0)
 
     results = []
     result_index_by_loom = {}
@@ -935,6 +964,9 @@ Only JSON.
 
         if frame_count % FRAME_SKIP != 0:
             continue
+
+        processed_detect_frames += 1
+        _emit_detect_progress(processed_detect_frames, total_detect_frames)
 
         _detect_log(f"\n{'='*50}")
         _detect_log(f"PROCESSING FRAME: {frame_count}")
@@ -1184,6 +1216,7 @@ Only JSON.
         json.dump(results, f, indent=4)
 
     _detect_log("\nSaved as unique_loom_output.json")
+    _emit_detect_progress(total_detect_frames, total_detect_frames, force_percent=100)
     return results
 
 
@@ -1396,6 +1429,58 @@ def _start_detection_frame_cleanup_worker() -> None:
 
 
 _start_detection_frame_cleanup_worker()
+
+
+def _cleanup_stale_detection_jobs() -> None:
+    cutoff = time.time() - DETECTION_JOB_TTL_SECONDS
+    stale_ids: list[str] = []
+
+    with DETECTION_PROGRESS_JOBS_LOCK:
+        for job_id, job in DETECTION_PROGRESS_JOBS.items():
+            updated_at = float(job.get("updated_at") or 0)
+            if updated_at <= 0:
+                continue
+            if updated_at < cutoff:
+                stale_ids.append(job_id)
+
+        for job_id in stale_ids:
+            DETECTION_PROGRESS_JOBS.pop(job_id, None)
+
+
+def _upsert_detection_job(job_id: str, **fields) -> dict:
+    now_ts = time.time()
+
+    with DETECTION_PROGRESS_JOBS_LOCK:
+        job = DETECTION_PROGRESS_JOBS.get(job_id)
+        if job is None:
+            job = {
+                "job_id": job_id,
+                "status": "processing",
+                "upload_progress": 0,
+                "detect_progress": 0,
+                "processed_frames": 0,
+                "total_frames": 1,
+                "message": "",
+                "created_at": now_ts,
+                "updated_at": now_ts,
+            }
+            DETECTION_PROGRESS_JOBS[job_id] = job
+
+        job.update(fields)
+        job["updated_at"] = now_ts
+        snapshot = dict(job)
+
+    _cleanup_stale_detection_jobs()
+    return snapshot
+
+
+def _get_detection_job_snapshot(job_id: str) -> dict | None:
+    _cleanup_stale_detection_jobs()
+    with DETECTION_PROGRESS_JOBS_LOCK:
+        job = DETECTION_PROGRESS_JOBS.get(job_id)
+        if job is None:
+            return None
+        return dict(job)
 
 
 def _build_video_bulk_docs(
@@ -2193,14 +2278,113 @@ def get_users(client, db, loom_collection, users_collection, warp_data_collectio
 
 # --- Loom Data Management ---
 
+
+def _attach_detection_frame_metadata(rows: list[dict]) -> list[dict]:
+    for row in rows:
+        frame_image_name = str(row.get("frame_image_name") or "").strip()
+        if not frame_image_name:
+            continue
+        row["frame_image_token"] = frame_image_name
+        row["frame_image_url"] = f"/static/detected_frames/{frame_image_name}"
+    return rows
+
+
+def _run_video_detection_pipeline(video_path: str, selected_shift: str, job_id: str | None = None) -> list[dict]:
+    def _progress_callback(processed_frames: int, total_frames: int, percent: int) -> None:
+        if not job_id:
+            return
+        _upsert_detection_job(
+            job_id,
+            status="processing",
+            upload_progress=100,
+            detect_progress=percent,
+            processed_frames=processed_frames,
+            total_frames=total_frames,
+            message=f"Detecting loom data... {percent}%",
+        )
+
+    extracted_data = extract_loom_data_from_video(video_path, progress_callback=_progress_callback)
+    if not isinstance(extracted_data, list):
+        raise RuntimeError("Extraction output must be a list of JSON rows.")
+
+    response_rows = _normalize_detected_rows(extracted_data, selected_shift)
+    if not response_rows:
+        raise ValueError("Could not detect loom rows from video.")
+
+    return _attach_detection_frame_metadata(response_rows)
+
+
+def _run_async_video_detection_job(job_id: str, temp_video_path: str, selected_shift: str) -> None:
+    global round_tracker
+
+    try:
+        rows = _run_video_detection_pipeline(temp_video_path, selected_shift, job_id=job_id)
+        snapshot = _get_detection_job_snapshot(job_id) or {}
+        processed_frames = int(snapshot.get("processed_frames") or 0)
+        total_frames = int(snapshot.get("total_frames") or max(processed_frames, 1))
+
+        _upsert_detection_job(
+            job_id,
+            status="completed",
+            upload_progress=100,
+            detect_progress=100,
+            processed_frames=processed_frames,
+            total_frames=max(1, total_frames),
+            message="Detection completed.",
+            loom_number=rows[0]["loom_number"],
+            meters=rows[0]["meters"],
+            rows=rows,
+        )
+    except ValueError as exc:
+        _upsert_detection_job(
+            job_id,
+            status="error",
+            upload_progress=100,
+            message=str(exc) or "Could not detect loom rows from video.",
+        )
+        app.logger.warning("Video detection job %s returned no rows.", job_id)
+    except Exception as exc:
+        _upsert_detection_job(
+            job_id,
+            status="error",
+            upload_progress=100,
+            message="Failed to detect data from video.",
+        )
+        app.logger.error("Failed video detection job %s: %s", job_id, exc, exc_info=True)
+    finally:
+        if temp_video_path and os.path.exists(temp_video_path):
+            try:
+                os.remove(temp_video_path)
+            except Exception as cleanup_error:
+                app.logger.warning("Failed to remove temp video file %s: %s", temp_video_path, cleanup_error)
+
+        try:
+            round_tracker.clear()
+        except Exception:
+            round_tracker = {}
+
+        try:
+            import gc
+
+            gc.collect()
+        except Exception:
+            pass
+
 @app.route('/detect-video-data', methods=['POST'])
 @login_required
 @admin_required
 def detect_video_data():
-    """Receives an uploaded video and returns detected rows for user review."""
+    """Receives an uploaded video and starts/returns loom detection."""
     global round_tracker
+
     video_file = request.files.get('video') or request.files.get('video_file')
     selected_shift = (request.form.get('shift') or request.form.get('video_shift') or '').strip()
+    async_requested = str(request.form.get('async') or request.args.get('async') or '1').strip().lower() in {
+        '1',
+        'true',
+        'yes',
+        'on',
+    }
 
     if not video_file or not video_file.filename:
         return jsonify({'status': 'error', 'message': 'video file is required.'}), 400
@@ -2209,6 +2393,7 @@ def detect_video_data():
         return jsonify({'status': 'error', 'message': 'shift is required for detection.'}), 400
 
     temp_video_path = None
+    worker_started = False
     try:
         _, ext = os.path.splitext(video_file.filename)
         with tempfile.NamedTemporaryFile(delete=False, suffix=(ext or '.mp4')) as temp_file:
@@ -2216,49 +2401,111 @@ def detect_video_data():
 
         video_file.save(temp_video_path)
 
-        extracted_data = extract_loom_data_from_video(temp_video_path)
-        if not isinstance(extracted_data, list):
-            return jsonify({'status': 'error', 'message': 'Extraction output must be a list of JSON rows.'}), 500
+        if async_requested:
+            job_id = uuid4().hex
+            _upsert_detection_job(
+                job_id,
+                status='processing',
+                upload_progress=100,
+                detect_progress=0,
+                processed_frames=0,
+                total_frames=1,
+                message='Uploading complete. Detection starting...',
+            )
 
-        response_rows = _normalize_detected_rows(extracted_data, selected_shift)
+            worker = threading.Thread(
+                target=_run_async_video_detection_job,
+                args=(job_id, temp_video_path, selected_shift),
+                name=f'detect-job-{job_id[:8]}',
+                daemon=True,
+            )
+            worker.start()
+            worker_started = True
 
-        if not response_rows:
-            return jsonify({'status': 'error', 'message': 'Could not detect loom rows from video.'}), 422
+            return jsonify(
+                {
+                    'status': 'processing',
+                    'job_id': job_id,
+                    'upload_progress': 100,
+                    'detect_progress': 0,
+                    'processed_frames': 0,
+                    'total_frames': 1,
+                    'message': 'Uploading complete. Detection starting...',
+                }
+            ), 202
 
-        for row in response_rows:
-            frame_image_name = str(row.get('frame_image_name') or '').strip()
-            if not frame_image_name:
-                continue
-            row['frame_image_token'] = frame_image_name
-            row['frame_image_url'] = url_for('static', filename=f'detected_frames/{frame_image_name}', _external=False)
+        response_rows = _run_video_detection_pipeline(temp_video_path, selected_shift)
 
-        return jsonify({
-            'status': 'success',
-            'loom_number': response_rows[0]['loom_number'],
-            'meters': response_rows[0]['meters'],
-            'rows': response_rows,
-        }), 200
+        return jsonify(
+            {
+                'status': 'completed',
+                'upload_progress': 100,
+                'detect_progress': 100,
+                'loom_number': response_rows[0]['loom_number'],
+                'meters': response_rows[0]['meters'],
+                'rows': response_rows,
+            }
+        ), 200
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc) or 'Could not detect loom rows from video.'}), 422
     except Exception as e:
         app.logger.error("Failed video detection: %s", e, exc_info=True)
         return jsonify({'status': 'error', 'message': 'Failed to detect data from video.'}), 500
     finally:
-        if temp_video_path and os.path.exists(temp_video_path):
+        should_cleanup_here = (not async_requested) or (async_requested and not worker_started)
+        if should_cleanup_here and temp_video_path and os.path.exists(temp_video_path):
             try:
                 os.remove(temp_video_path)
             except Exception as cleanup_error:
                 app.logger.warning("Failed to remove temp video file %s: %s", temp_video_path, cleanup_error)
 
         # Clear any residual in-memory state after each video detection run.
-        try:
-            round_tracker.clear()
-        except Exception:
-            round_tracker = {}
+        if should_cleanup_here:
+            try:
+                round_tracker.clear()
+            except Exception:
+                round_tracker = {}
 
-        try:
-            import gc
-            gc.collect()
-        except Exception:
-            pass
+            try:
+                import gc
+
+                gc.collect()
+            except Exception:
+                pass
+
+
+@app.route('/detect-video-progress/<job_id>', methods=['GET'])
+@login_required
+@admin_required
+def detect_video_progress(job_id: str):
+    """Returns progress and final output for an async video-detection job."""
+    safe_job_id = str(job_id or '').strip()
+    if not safe_job_id:
+        return jsonify({'status': 'error', 'message': 'job_id is required.'}), 400
+
+    snapshot = _get_detection_job_snapshot(safe_job_id)
+    if snapshot is None:
+        return jsonify({'status': 'error', 'message': 'Detection job not found or expired.'}), 404
+
+    status_value = str(snapshot.get('status') or 'processing').strip().lower()
+    payload = {
+        'status': status_value,
+        'job_id': safe_job_id,
+        'upload_progress': int(snapshot.get('upload_progress') or 0),
+        'detect_progress': int(snapshot.get('detect_progress') or 0),
+        'processed_frames': int(snapshot.get('processed_frames') or 0),
+        'total_frames': int(snapshot.get('total_frames') or 1),
+        'message': str(snapshot.get('message') or ''),
+    }
+
+    if status_value == 'completed':
+        payload['loom_number'] = snapshot.get('loom_number')
+        payload['meters'] = snapshot.get('meters')
+        payload['rows'] = snapshot.get('rows') or []
+    elif status_value == 'error':
+        payload['message'] = payload['message'] or 'Failed to detect data from video.'
+
+    return jsonify(payload), 200
 
 
 @app.route('/add_video_form_bulk', methods=['POST'])

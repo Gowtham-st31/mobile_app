@@ -28,6 +28,12 @@ class LoginResult {
   const LoginResult({required this.role});
 }
 
+typedef DetectVideoProgressCallback = void Function(
+  int uploadPercent,
+  int detectPercent,
+  String phase,
+);
+
 class ApiClient {
   final Dio _dio;
 
@@ -198,9 +204,27 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> detectVideoData({
     required File videoFile,
     required String shift,
+    DetectVideoProgressCallback? onProgress,
   }) async {
     try {
-      String _resolveFrameImageUrl(String raw) {
+      int clampPercent(int value) {
+        if (value < 0) return 0;
+        if (value > 100) return 100;
+        return value;
+      }
+
+      int toPercent(dynamic raw, {int fallback = 0}) {
+        if (raw is num) return clampPercent(raw.round());
+        final parsed = int.tryParse((raw ?? '').toString().trim());
+        if (parsed == null) return clampPercent(fallback);
+        return clampPercent(parsed);
+      }
+
+      void emitProgress(int uploadPercent, int detectPercent, String phase) {
+        onProgress?.call(clampPercent(uploadPercent), clampPercent(detectPercent), phase);
+      }
+
+      String resolveFrameImageUrl(String raw) {
         final value = raw.trim();
         if (value.isEmpty) return '';
 
@@ -219,7 +243,7 @@ class ApiClient {
         return base.resolve(relative).toString();
       }
 
-      Map<String, dynamic> _toRowPayload({
+      Map<String, dynamic> toRowPayload({
         required dynamic loom,
         required dynamic meters,
         required Map<String, dynamic> source,
@@ -229,7 +253,7 @@ class ApiClient {
           'meters': meters,
         };
 
-        final frameImageUrl = _resolveFrameImageUrl(
+        final frameImageUrl = resolveFrameImageUrl(
           (source['frame_image_url'] ?? source['frame_url'] ?? '').toString(),
         );
         final frameImageToken = (source['frame_image_token'] ?? source['frame_image_name'] ?? '').toString().trim();
@@ -244,14 +268,59 @@ class ApiClient {
         return row;
       }
 
+      List<Map<String, dynamic>> extractRows(Map<String, dynamic> data) {
+        dynamic rawRows = data['rows'] ?? data['detected_rows'] ?? data['data'];
+        rawRows ??= const [];
+
+        final rows = <Map<String, dynamic>>[];
+
+        if (rawRows is Map) {
+          rawRows = [rawRows];
+        }
+
+        if (rawRows is! List) {
+          final singleLoom = data['loom_number'] ?? data['loom'];
+          final singleMeters = data['meters'] ?? data['meter'];
+          if (singleLoom != null && singleMeters != null) {
+            rows.add(toRowPayload(loom: singleLoom, meters: singleMeters, source: data));
+          }
+          return rows;
+        }
+
+        for (final row in rawRows) {
+          if (row is! Map) continue;
+
+          final cast = row.cast<String, dynamic>();
+          final loom = cast['loom_number'] ?? cast['loom'];
+          final meters = cast['meters'] ?? cast['meter'];
+          if (loom == null || meters == null) {
+            continue;
+          }
+
+          rows.add(toRowPayload(loom: loom, meters: meters, source: cast));
+        }
+
+        if (rows.isEmpty) {
+          final singleLoom = data['loom_number'] ?? data['loom'];
+          final singleMeters = data['meters'] ?? data['meter'];
+          if (singleLoom != null && singleMeters != null) {
+            rows.add(toRowPayload(loom: singleLoom, meters: singleMeters, source: data));
+          }
+        }
+
+        return rows;
+      }
+
       final fileSizeBytes = await videoFile.length();
       if (fileSizeBytes <= 0) {
         throw const ApiException('Selected video file is empty. Please choose a valid video.');
       }
 
+      emitProgress(0, 0, 'uploading');
+
       final fileName = videoFile.path.split(Platform.pathSeparator).last;
-      final videoPart = MultipartFile(
-        videoFile.openRead(),
+      final videoPart = MultipartFile.fromStream(
+        () => videoFile.openRead(),
         fileSizeBytes,
         filename: fileName,
       );
@@ -260,6 +329,7 @@ class ApiClient {
         '/detect-video-data',
         data: FormData.fromMap({
           'shift': shift,
+          'async': '1',
           // Diagnostic metadata; backend can ignore this field safely.
           'video_size_bytes': fileSizeBytes.toString(),
           // Upload the complete original video stream to backend.
@@ -270,7 +340,14 @@ class ApiClient {
           sendTimeout: const Duration(minutes: 30),
           receiveTimeout: const Duration(minutes: 30),
         ),
+        onSendProgress: (sent, total) {
+          if (total <= 0) return;
+          final uploadPercent = ((sent / total) * 100).round();
+          emitProgress(uploadPercent, 0, 'uploading');
+        },
       );
+
+      emitProgress(100, 0, 'detecting');
 
       final payload = response.data;
       if (payload is! Map) {
@@ -282,48 +359,57 @@ class ApiClient {
       }
 
       final data = payload.cast<String, dynamic>();
-      if (data['status'] != 'success') {
+
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+      if (status == 'processing') {
+        final jobId = (data['job_id'] ?? '').toString().trim();
+        if (jobId.isEmpty) {
+          throw ApiException('Detection started but no job id was returned.', statusCode: response.statusCode);
+        }
+
+        final timeoutAt = DateTime.now().add(const Duration(minutes: 30));
+        var lastDetectPercent = toPercent(data['detect_progress']);
+        emitProgress(100, lastDetectPercent, 'detecting');
+
+        while (true) {
+          if (DateTime.now().isAfter(timeoutAt)) {
+            throw const ApiException('Detection timed out. Please try again with a shorter video.');
+          }
+
+          final pollResponse = await _dio.get(
+            '/detect-video-progress/$jobId',
+            options: Options(receiveTimeout: const Duration(minutes: 30)),
+          );
+
+          final pollPayload = pollResponse.data;
+          if (pollPayload is! Map) {
+            throw ApiException('Unexpected detection progress response.', statusCode: pollResponse.statusCode);
+          }
+
+          final pollData = pollPayload.cast<String, dynamic>();
+          final pollStatus = (pollData['status'] ?? '').toString().trim().toLowerCase();
+          lastDetectPercent = toPercent(pollData['detect_progress'], fallback: lastDetectPercent);
+          emitProgress(100, lastDetectPercent, 'detecting');
+
+          if (pollStatus == 'completed' || pollStatus == 'success') {
+            emitProgress(100, 100, 'detecting');
+            return extractRows(pollData);
+          }
+
+          if (pollStatus == 'error') {
+            throw ApiException((pollData['message'] ?? 'Failed to detect video data').toString(), statusCode: pollResponse.statusCode);
+          }
+
+          await Future.delayed(const Duration(milliseconds: 700));
+        }
+      }
+
+      if (status != 'completed' && status != 'success') {
         throw ApiException((data['message'] ?? 'Failed to detect video data').toString(), statusCode: response.statusCode);
       }
 
-      dynamic rawRows = data['rows'] ?? data['detected_rows'] ?? data['data'];
-      rawRows ??= const [];
-
-      final rows = <Map<String, dynamic>>[];
-
-      if (rawRows is Map) {
-        rawRows = [rawRows];
-      }
-
-      if (rawRows is! List) {
-        final singleLoom = data['loom_number'] ?? data['loom'];
-        final singleMeters = data['meters'] ?? data['meter'];
-        if (singleLoom != null && singleMeters != null) {
-          rows.add(_toRowPayload(loom: singleLoom, meters: singleMeters, source: data));
-        }
-        return rows;
-      }
-
-      for (final row in rawRows) {
-        if (row is Map) {
-          final cast = row.cast<String, dynamic>();
-          final loom = cast['loom_number'] ?? cast['loom'];
-          final meters = cast['meters'] ?? cast['meter'];
-          if (loom == null || meters == null) {
-            continue;
-          }
-          rows.add(_toRowPayload(loom: loom, meters: meters, source: cast));
-        }
-      }
-
-      if (rows.isEmpty) {
-        final singleLoom = data['loom_number'] ?? data['loom'];
-        final singleMeters = data['meters'] ?? data['meter'];
-        if (singleLoom != null && singleMeters != null) {
-          rows.add(_toRowPayload(loom: singleLoom, meters: singleMeters, source: data));
-        }
-      }
-
+      emitProgress(100, 100, 'detecting');
+      final rows = extractRows(data);
       return rows;
     } on ApiException {
       rethrow;

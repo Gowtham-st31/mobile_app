@@ -42,6 +42,9 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   bool _cameraInitializing = false;
   bool _recording = false;
   bool _recordingPaused = false;
+  int _uploadProgress = 0;
+  int _detectProgress = 0;
+  String _detectPhase = '';
 
   File? _selectedVideoFile;
 
@@ -348,11 +351,24 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       return;
     }
 
-    setState(() => _detecting = true);
+    setState(() {
+      _detecting = true;
+      _uploadProgress = 0;
+      _detectProgress = 0;
+      _detectPhase = 'uploading';
+    });
     try {
       final rows = await widget.controller.api.detectVideoData(
         videoFile: file,
         shift: selectedShift,
+        onProgress: (uploadPercent, detectPercent, phase) {
+          if (!mounted) return;
+          setState(() {
+            _uploadProgress = uploadPercent;
+            _detectProgress = detectPercent;
+            _detectPhase = phase;
+          });
+        },
       );
 
       if (rows.isEmpty) {
@@ -365,7 +381,12 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     } catch (e) {
       _showMessage(e.toString());
     } finally {
-      if (mounted) setState(() => _detecting = false);
+      if (mounted) {
+        setState(() {
+          _detecting = false;
+          _detectPhase = '';
+        });
+      }
     }
   }
 
@@ -512,10 +533,8 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                     ),
                     FilledButton.icon(
                       onPressed: (_detecting || _submitting) ? null : () => _runDetection(autoTriggered: false),
-                      icon: _detecting
-                          ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.search),
-                      label: const Text('Auto Detect from Video'),
+                      icon: const Icon(Icons.search),
+                      label: Text(_detecting ? 'Detecting... ${_detectProgress.clamp(0, 100)}%' : 'Auto Detect from Video'),
                     ),
                   ],
                 ),
@@ -526,6 +545,42 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                     'Selected video: ${_videoName(_selectedVideoFile!)}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+
+                if (_detecting) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Uploading video... ${_uploadProgress.clamp(0, 100)}%',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        LinearProgressIndicator(value: _uploadProgress.clamp(0, 100) / 100),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Detecting loom data... ${_detectProgress.clamp(0, 100)}%',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        LinearProgressIndicator(value: _detectProgress.clamp(0, 100) / 100),
+                        if (_detectPhase.trim().isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            _detectPhase == 'uploading' ? 'Uploading to server...' : 'Processing frames on server...',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
 
                 const SizedBox(height: 14),
                 Card(

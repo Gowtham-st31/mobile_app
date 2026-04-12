@@ -339,9 +339,32 @@
                             <div>
                                 <button type="button" id="detect-btn" class="w-full btn-secondary py-3.5 px-6 rounded-xl font-bold shadow-sm flex items-center justify-center text-base tracking-wide">
                                     <span id="detect-btnText">Auto Detect from Video</span>
-                                    <span id="detect-btnSpinner" class="spinner hidden ml-2"></span>
                                 </button>
                             </div>
+                        </div>
+
+                        <div id="videoDetectProgressContainer" class="hidden bg-white/20 backdrop-blur-sm border border-white/20 rounded-2xl p-4 sm:p-5 space-y-4">
+                            <div>
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="text-sm font-bold text-gray-700">Uploading video...</span>
+                                    <span id="videoUploadProgressPercent" class="text-sm font-bold text-gray-700">0%</span>
+                                </div>
+                                <div class="w-full h-2.5 bg-white/40 rounded-full overflow-hidden">
+                                    <div id="videoUploadProgressBar" class="h-full bg-blue-600 rounded-full transition-all duration-200" style="width: 0%;"></div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="text-sm font-bold text-gray-700">Detecting loom data...</span>
+                                    <span id="videoDetectProgressPercent" class="text-sm font-bold text-gray-700">0%</span>
+                                </div>
+                                <div class="w-full h-2.5 bg-white/40 rounded-full overflow-hidden">
+                                    <div id="videoDetectProgressBar" class="progress-bar h-full bg-indigo-600 rounded-full transition-all duration-200" style="width: 0%;"></div>
+                                </div>
+                            </div>
+
+                            <p id="progress-text" class="text-xs text-gray-600 font-medium">Waiting to start...</p>
                         </div>
 
                         <div class="bg-white/20 backdrop-blur-sm border border-white/20 rounded-2xl p-4 sm:p-5 space-y-4">
@@ -1938,8 +1961,130 @@
             });
         }
 
+        function clampPercent(value) {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) return 0;
+            if (parsed < 0) return 0;
+            if (parsed > 100) return 100;
+            return Math.round(parsed);
+        }
+
+        function setDetectButtonBusy(isBusy, label) {
+            const detectButton = document.getElementById('detect-btn');
+            const detectBtnText = document.getElementById('detect-btnText');
+            if (detectButton) detectButton.disabled = !!isBusy;
+            if (detectBtnText && label) detectBtnText.textContent = label;
+        }
+
+        function setVideoDetectProgress(uploadPercent, detectPercent, progressText) {
+            const container = document.getElementById('videoDetectProgressContainer');
+            const uploadBar = document.getElementById('videoUploadProgressBar');
+            const uploadPercentEl = document.getElementById('videoUploadProgressPercent');
+            const detectBar = document.getElementById('videoDetectProgressBar');
+            const detectPercentEl = document.getElementById('videoDetectProgressPercent');
+            const progressTextEl = document.getElementById('progress-text');
+
+            const upload = clampPercent(uploadPercent);
+            const detect = clampPercent(detectPercent);
+
+            if (container) container.classList.remove('hidden');
+            if (uploadBar) uploadBar.style.width = `${upload}%`;
+            if (uploadPercentEl) uploadPercentEl.textContent = `${upload}%`;
+            if (detectBar) detectBar.style.width = `${detect}%`;
+            if (detectPercentEl) detectPercentEl.textContent = `${detect}%`;
+            if (progressTextEl && progressText) progressTextEl.textContent = progressText;
+        }
+
+        function uploadVideoForDetection(detectFormData, onUploadProgress) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/detect-video-data');
+                xhr.responseType = 'json';
+
+                xhr.upload.onprogress = (event) => {
+                    if (!event.lengthComputable) return;
+                    const percent = clampPercent((event.loaded / event.total) * 100);
+                    onUploadProgress(percent);
+                };
+
+                xhr.onerror = () => reject({ type: 'network' });
+                xhr.onload = () => {
+                    let responseData = xhr.response;
+                    if (!responseData) {
+                        try {
+                            responseData = JSON.parse(xhr.responseText || '{}');
+                        } catch (_) {
+                            responseData = {};
+                        }
+                    }
+
+                    if (xhr.status === 401 || xhr.status === 403) {
+                        reject({ type: 'auth', status: xhr.status, data: responseData });
+                        return;
+                    }
+
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve(responseData || {});
+                        return;
+                    }
+
+                    reject({ type: 'http', status: xhr.status, data: responseData || {} });
+                };
+
+                xhr.send(detectFormData);
+            });
+        }
+
+        async function pollVideoDetectionProgress(jobId) {
+            const encodedJobId = encodeURIComponent(jobId);
+            const timeoutAt = Date.now() + (30 * 60 * 1000);
+
+            while (true) {
+                if (Date.now() > timeoutAt) {
+                    throw { type: 'timeout' };
+                }
+
+                const response = await fetch(`/detect-video-progress/${encodedJobId}`);
+
+                if (response.status === 401 || response.status === 403) {
+                    throw { type: 'auth', status: response.status };
+                }
+
+                let data = {};
+                try {
+                    data = await response.json();
+                } catch (_) {
+                    data = {};
+                }
+
+                if (!response.ok) {
+                    throw { type: 'http', status: response.status, data };
+                }
+
+                const status = String(data.status || '').trim().toLowerCase();
+                const uploadProgress = clampPercent(data.upload_progress ?? 100);
+                const detectProgress = clampPercent(data.detect_progress ?? 0);
+
+                setVideoDetectProgress(uploadProgress, detectProgress, `Detecting loom data... ${detectProgress}%`);
+                setDetectButtonBusy(true, `Detecting... ${detectProgress}%`);
+
+                if (status === 'completed' || status === 'success') {
+                    setVideoDetectProgress(100, 100, 'Detecting loom data... 100%');
+                    return data;
+                }
+
+                if (status === 'error') {
+                    throw { type: 'server', data };
+                }
+
+                await new Promise(resolve => setTimeout(resolve, 700));
+            }
+        }
+
         async function runVideoDetection(isAutoTriggered = false) {
-            toggleSpinner('detect-btn', true);
+            setDetectButtonBusy(true, 'Preparing...');
+            setVideoDetectProgress(0, 0, 'Uploading video... 0%');
+
             try {
                 const videoForm = document.getElementById('videoDataEntryForm');
                 const videoInput = document.getElementById('video_file');
@@ -1969,25 +2114,34 @@
                     detectFormData.set('video_file', selectedVideo, 'recorded_video.webm');
                 }
                 detectFormData.set('shift', selectedShift);
+                detectFormData.set('async', '1');
 
-                const response = await fetch('/detect-video-data', {
-                    method: 'POST',
-                    body: detectFormData,
+                const startData = await uploadVideoForDetection(detectFormData, (uploadPercent) => {
+                    setVideoDetectProgress(uploadPercent, 0, `Uploading video... ${uploadPercent}%`);
+                    setDetectButtonBusy(true, `Uploading... ${uploadPercent}%`);
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    showNotification('sessionExpired', 'error');
-                    setTimeout(() => window.location.href = '/login', 1500);
+                let finalData = startData;
+                const startStatus = String(startData.status || '').trim().toLowerCase();
+
+                if (startStatus === 'processing') {
+                    const jobId = String(startData.job_id || '').trim();
+                    if (!jobId) {
+                        showNotification('videoDetectFailed', 'error');
+                        return;
+                    }
+
+                    setVideoDetectProgress(100, clampPercent(startData.detect_progress ?? 0), `Detecting loom data... ${clampPercent(startData.detect_progress ?? 0)}%`);
+                    finalData = await pollVideoDetectionProgress(jobId);
+                }
+
+                const finalStatus = String(finalData.status || '').trim().toLowerCase();
+                if (finalStatus !== 'completed' && finalStatus !== 'success') {
+                    showNotification(finalData.message || 'videoDetectFailed', 'error');
                     return;
                 }
 
-                const data = await response.json();
-                if (!response.ok || data.status !== 'success') {
-                    showNotification(data.message || 'videoDetectFailed', 'error');
-                    return;
-                }
-
-                const rows = Array.isArray(data.rows) ? data.rows : [];
+                const rows = Array.isArray(finalData.rows) ? finalData.rows : [];
                 if (!rows.length) {
                     showNotification('videoDetectFailed', 'error');
                     return;
@@ -2002,9 +2156,18 @@
                 showNotification('videoDetectSuccess', 'success');
             } catch (error) {
                 console.error('Video detect error:', error);
-                showNotification('networkError', 'error');
+                if (error && error.type === 'auth') {
+                    showNotification('sessionExpired', 'error');
+                    setTimeout(() => window.location.href = '/login', 1500);
+                } else if (error && error.type === 'timeout') {
+                    showNotification('Detection timed out. Please try with a shorter video.', 'error');
+                } else if (error && error.data && error.data.message) {
+                    showNotification(error.data.message, 'error');
+                } else {
+                    showNotification('networkError', 'error');
+                }
             } finally {
-                toggleSpinner('detect-btn', false);
+                setDetectButtonBusy(false, 'Auto Detect from Video');
             }
         }
 
