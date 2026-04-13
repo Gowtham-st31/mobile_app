@@ -617,10 +617,13 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
 
     state = round_tracker if tracker is None else tracker
 
-    if loom_label is None:
-        key = f"{day_label}_{shift_label}"
+    loom_key = "" if loom_label is None else str(loom_label).strip()
+    if loom_key:
+        # Alternate .5 ties per loom (not per frame or per day/shift field).
+        key = f"loom::{loom_key}"
     else:
-        key = f"{str(loom_label).strip()}::{day_label}_{shift_label}"
+        # Fallback when loom context is unavailable.
+        key = f"{day_label}_{shift_label}"
 
     half = Decimal("0.5")
     eps = Decimal("0.000001")
@@ -632,7 +635,7 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
         return whole
 
     else:
-        # Alternate exact/near .5 ties: low, high, low, high ... per key.
+        # Alternate exact/near .5 ties: low, high, low, high ... per loom key.
         next_up = bool(state.get(key, False))
         result = whole + 1 if next_up else whole
         state[key] = not next_up
