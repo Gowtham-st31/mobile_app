@@ -45,6 +45,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   int _uploadProgress = 0;
   int _detectProgress = 0;
   String _detectPhase = '';
+  bool _showDetectProgressPanel = false;
 
   File? _selectedVideoFile;
 
@@ -283,6 +284,50 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
 
   String _videoName(File file) => file.path.split(Platform.pathSeparator).last;
 
+  int _clampPercent(int value) {
+    if (value < 0) return 0;
+    if (value > 100) return 100;
+    return value;
+  }
+
+  String _progressTitleText() {
+    final upload = _clampPercent(_uploadProgress);
+    final detect = _clampPercent(_detectProgress);
+
+    if (_detecting && _detectPhase == 'uploading') {
+      return 'Uploading video... $upload%';
+    }
+    if (_detecting && _detectPhase == 'detecting') {
+      return 'Detecting loom data... $detect%';
+    }
+    if (_detectPhase == 'completed') {
+      return 'Detection completed (100%).';
+    }
+    if (_detectPhase == 'error') {
+      return 'Detection failed. Please try again.';
+    }
+    if (upload > 0 || detect > 0) {
+      return 'Last detection: upload $upload%, detect $detect%';
+    }
+    return 'Detection progress';
+  }
+
+  String _progressDetailText() {
+    if (_detectPhase == 'uploading') {
+      return 'Uploading to server...';
+    }
+    if (_detectPhase == 'detecting') {
+      return 'Processing frames on server...';
+    }
+    if (_detectPhase == 'completed') {
+      return 'You can review/edit rows and submit now.';
+    }
+    if (_detectPhase == 'error') {
+      return 'Try a clearer or shorter video if this repeats.';
+    }
+    return '';
+  }
+
   void _clearDetectedRows() {
     for (final row in _detectedRows) {
       row.dispose();
@@ -356,6 +401,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       _uploadProgress = 0;
       _detectProgress = 0;
       _detectPhase = 'uploading';
+      _showDetectProgressPanel = true;
     });
     try {
       final rows = await widget.controller.api.detectVideoData(
@@ -377,14 +423,27 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       }
 
       _applyDetectedRows(rows);
+      if (mounted) {
+        setState(() {
+          _uploadProgress = 100;
+          _detectProgress = 100;
+          _detectPhase = 'completed';
+        });
+      }
       _showMessage('${rows.length} rows detected. You can edit before submitting.');
     } catch (e) {
+      if (mounted) {
+        setState(() {
+          if (_detectPhase != 'completed') {
+            _detectPhase = 'error';
+          }
+        });
+      }
       _showMessage(e.toString());
     } finally {
       if (mounted) {
         setState(() {
           _detecting = false;
-          _detectPhase = '';
         });
       }
     }
@@ -498,6 +557,9 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   @override
   Widget build(BuildContext context) {
     final cameraController = _cameraController;
+    final uploadPercent = _clampPercent(_uploadProgress);
+    final detectPercent = _clampPercent(_detectProgress);
+    final progressDetail = _progressDetailText();
 
     return Scaffold(
       appBar: AppBar(
@@ -534,7 +596,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                     FilledButton.icon(
                       onPressed: (_detecting || _submitting) ? null : () => _runDetection(autoTriggered: false),
                       icon: const Icon(Icons.search),
-                      label: Text(_detecting ? 'Detecting... ${_detectProgress.clamp(0, 100)}%' : 'Auto Detect from Video'),
+                      label: Text(_detecting ? 'Detecting... $detectPercent%' : 'Auto Detect from Video'),
                     ),
                   ],
                 ),
@@ -546,7 +608,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
 
-                if (_detecting) ...[
+                if (_showDetectProgressPanel) ...[
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -558,23 +620,42 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Uploading video... ${_uploadProgress.clamp(0, 100)}%',
+                          _progressTitleText(),
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Uploading video... $uploadPercent%',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 6),
-                        LinearProgressIndicator(value: _uploadProgress.clamp(0, 100) / 100),
+                        LinearProgressIndicator(value: uploadPercent / 100),
                         const SizedBox(height: 12),
                         Text(
-                          'Detecting loom data... ${_detectProgress.clamp(0, 100)}%',
+                          'Detecting loom data... $detectPercent%',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 6),
-                        LinearProgressIndicator(value: _detectProgress.clamp(0, 100) / 100),
-                        if (_detectPhase.trim().isNotEmpty) ...[
+                        LinearProgressIndicator(value: detectPercent / 100),
+                        if (progressDetail.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Text(
-                            _detectPhase == 'uploading' ? 'Uploading to server...' : 'Processing frames on server...',
+                            progressDetail,
                             style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                        if (!_detecting) ...[
+                          const SizedBox(height: 10),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  _showDetectProgressPanel = false;
+                                });
+                              },
+                              child: const Text('Hide Progress'),
+                            ),
                           ),
                         ],
                       ],

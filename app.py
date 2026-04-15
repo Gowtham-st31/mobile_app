@@ -619,9 +619,11 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
 
     loom_key = "" if loom_label is None else str(loom_label).strip()
     shift_key = str(shift_label or "").strip().lower()
-    if loom_key:
-        # Alternate .5 ties per loom and shift so Day/Ngt do not affect each other.
-        key = f"loom::{loom_key}::shift::{shift_key or 'unknown'}"
+    if shift_key:
+        # Alternate .5 ties across finalized loom entries per shift.
+        key = f"shift::{shift_key}"
+    elif loom_key:
+        key = f"loom::{loom_key}"
     else:
         # Fallback when loom context is unavailable.
         key = f"{day_label}_{shift_label}"
@@ -636,7 +638,7 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
         return whole
 
     else:
-        # Alternate exact/near .5 ties: low, high, low, high ... per loom+shift key.
+        # Alternate exact/near .5 ties: low, high, low, high ... per shift key.
         next_up = bool(state.get(key, False))
         result = whole + 1 if next_up else whole
         state[key] = not next_up
@@ -655,6 +657,7 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
     global round_tracker
     round_tracker = {}
     local_round_tracker = {}
+    finalized_round_cache = {}
 
     # ===== CONFIG =====
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
@@ -839,28 +842,6 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
             final_row[key] = selected_value
             _detect_log(f"  • {key}: {selected_value} (votes {vote_count}/{total_votes})")
 
-        # Round only once on finalized values (after majority vote), not per frame.
-        # This prevents .5 alternation from polluting per-frame majority counts.
-        for key in list(final_row.keys()):
-            if key in {"loom", "confidence", "frame", "group_count", "group_majority_count"}:
-                continue
-
-            value = final_row.get(key)
-            if value is None:
-                continue
-
-            parts = key.split("_")
-            if len(parts) == 2:
-                day_label = parts[0]
-                shift_label = parts[1]
-                final_row[key] = custom_shift_round(
-                    str(value),
-                    day_label,
-                    shift_label,
-                    loom_label=final_row.get("loom"),
-                    tracker=local_round_tracker,
-                )
-
         best_src = max(loom_rows, key=lambda r: float(r.get("confidence") or 0.0))
         avg_conf = sum(float(r.get("confidence") or 0.0) for r in loom_rows) / max(len(loom_rows), 1)
         final_row["frame"] = best_src.get("frame")
@@ -893,6 +874,43 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
             int(row.get("frame") or 0),
         )
 
+    def _round_finalized_row_values(row: dict) -> dict:
+        """Apply .5 alternation once per finalized loom save, never per frame."""
+        loom_key = str(row.get("loom") or "").strip()
+        if not loom_key:
+            return row
+
+        for key in list(row.keys()):
+            if key in {"loom", "confidence", "frame", "group_count", "group_majority_count"}:
+                continue
+
+            value = row.get(key)
+            if value is None:
+                continue
+
+            parts = key.split("_")
+            if len(parts) != 2:
+                continue
+
+            day_label, shift_label = parts
+            loom_round_key = f"{loom_key}::{key}"
+
+            if loom_round_key in finalized_round_cache:
+                row[key] = finalized_round_cache[loom_round_key]
+                continue
+
+            rounded_value = custom_shift_round(
+                str(value),
+                day_label,
+                shift_label,
+                loom_label=loom_key,
+                tracker=local_round_tracker,
+            )
+            row[key] = rounded_value
+            finalized_round_cache[loom_round_key] = rounded_value
+
+        return row
+
     def _commit_finalized_row(row: dict | None) -> None:
         """Commit one finalized loom row while preventing repeated loom entries."""
         if row is None:
@@ -901,6 +919,9 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
         loom_key = str(row.get("loom") or "").strip()
         if not loom_key:
             return
+
+        # Apply .5 alternation only when saving finalized loom rows.
+        row = _round_finalized_row_values(row)
 
         existing_index = result_index_by_loom.get(loom_key)
         if existing_index is None:
