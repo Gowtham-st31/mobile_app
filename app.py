@@ -617,11 +617,10 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
 
     state = round_tracker if tracker is None else tracker
 
-    loom_key = "" if loom_label is None else str(loom_label).strip()
     shift_key = str(shift_label or "").strip().lower()
-    if loom_key:
-        # Alternate .5 ties per loom and shift so Day/Ngt do not affect each other.
-        key = f"loom::{loom_key}::shift::{shift_key or 'unknown'}"
+    if shift_key:
+        # Alternate .5 ties across finalized loom entries per shift.
+        key = f"shift::{shift_key}"
     else:
         # Fallback when loom context is unavailable.
         key = f"{day_label}_{shift_label}"
@@ -636,7 +635,7 @@ def custom_shift_round(value_str, day_label, shift_label, loom_label=None, track
         return whole
 
     else:
-        # Alternate exact/near .5 ties: low, high, low, high ... per loom+shift key.
+        # Alternate exact/near .5 ties: low, high, low, high ... per shift key.
         next_up = bool(state.get(key, False))
         result = whole + 1 if next_up else whole
         state[key] = not next_up
@@ -839,29 +838,30 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
             final_row[key] = selected_value
             _detect_log(f"  • {key}: {selected_value} (votes {vote_count}/{total_votes})")
 
-        # Round only once on finalized values (after majority vote), not per frame.
-        # This prevents .5 alternation from polluting per-frame majority counts.
+        best_src = max(loom_rows, key=lambda r: float(r.get("confidence") or 0.0))
+
+        # Keep final shift meters consistent with the displayed representative frame.
+        # Majority voting can occasionally drift to a nearby misread value (for example,
+        # 38.7 vs 39.5). When the drift is large, trust the best-confidence frame.
         for key in list(final_row.keys()):
             if key in {"loom", "confidence", "frame", "group_count", "group_majority_count"}:
                 continue
-
-            value = final_row.get(key)
-            if value is None:
+            if not str(key).strip().lower().endswith(("_day", "_ngt")):
                 continue
 
-            parts = key.split("_")
-            if len(parts) == 2:
-                day_label = parts[0]
-                shift_label = parts[1]
-                final_row[key] = custom_shift_round(
-                    str(value),
-                    day_label,
-                    shift_label,
-                    loom_label=final_row.get("loom"),
-                    tracker=local_round_tracker,
-                )
+            src_value = best_src.get(key)
+            if src_value is None:
+                continue
 
-        best_src = max(loom_rows, key=lambda r: float(r.get("confidence") or 0.0))
+            try:
+                voted_number = float(final_row.get(key))
+                src_number = float(src_value)
+            except Exception:
+                continue
+
+            if abs(voted_number - src_number) >= 0.6:
+                final_row[key] = src_value
+
         avg_conf = sum(float(r.get("confidence") or 0.0) for r in loom_rows) / max(len(loom_rows), 1)
         final_row["frame"] = best_src.get("frame")
         final_row["confidence"] = round(avg_conf, 4)
@@ -926,6 +926,34 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
                 f"old_conf={float(old_row.get('confidence') or 0.0):.2f} >= "
                 f"new_conf={float(row.get('confidence') or 0.0):.2f}"
             )
+
+    def _apply_rounding_to_final_results(rows: list[dict]) -> None:
+        """Apply .5 alternation once on final deduped loom rows (never per frame/group candidate)."""
+        for row in rows:
+            loom_key = str(row.get("loom") or "").strip()
+            if not loom_key:
+                continue
+
+            for key in list(row.keys()):
+                if key in {"loom", "confidence", "frame", "group_count", "group_majority_count"}:
+                    continue
+
+                value = row.get(key)
+                if value is None:
+                    continue
+
+                parts = key.split("_")
+                if len(parts) != 2:
+                    continue
+
+                day_label, shift_label = parts
+                row[key] = custom_shift_round(
+                    str(value),
+                    day_label,
+                    shift_label,
+                    loom_label=loom_key,
+                    tracker=local_round_tracker,
+                )
 
     prompt = """
 Read the industrial loom shift meter image.
@@ -1202,6 +1230,9 @@ Only JSON.
         finalized = _finalize_group_rows(current_group_rows)
         _commit_finalized_row(finalized)
 
+    # Round only once after final loom dedupe selection is complete.
+    _apply_rounding_to_final_results(results)
+
     def _loom_sort_key(row: dict):
         loom_text = str((row or {}).get("loom") or "").strip()
         if loom_text.isdigit():
@@ -1228,12 +1259,6 @@ def _resolve_detected_meters(extracted_data: dict, selected_shift: str) -> int |
     """Normalizes meters output when extractor returns shift-wise values."""
     raw_meters = extracted_data.get("meters")
 
-    if isinstance(raw_meters, (int, float, str)):
-        try:
-            return int(round(float(raw_meters)))
-        except Exception:
-            return None
-
     shift_key = (selected_shift or "").strip().lower()
 
     if shift_key in {"morning", "day"}:
@@ -1243,6 +1268,13 @@ def _resolve_detected_meters(extracted_data: dict, selected_shift: str) -> int |
                     return int(round(float(v)))
                 except Exception:
                     return None
+
+    # Fallback to generic meters only if no shift-specific value is found.
+    if isinstance(raw_meters, (int, float, str)):
+        try:
+            return int(round(float(raw_meters)))
+        except Exception:
+            return None
 
     if shift_key in {"night", "ngt"}:
         for k, v in extracted_data.items():
