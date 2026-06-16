@@ -509,9 +509,9 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
 IST = pytz.timezone('Asia/Kolkata')
 
 # --- AI (Gemini) configuration ---
-# Default model: Gemma 3 27B IT (instruction-tuned chat).
-# Hardcoding to 'gemma-3-27b-it' to override any environment variable issues on Render.
-GEMINI_MODEL = "gemma-3-27b-it"
+# Default model: Gemma 4 31B IT (instruction-tuned chat).
+# Hardcoding to 'gemma-4-31b-it' to override any environment variable issues on Render.
+GEMINI_MODEL = "gemma-4-31b-it"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # Conservative defaults to avoid token/context blowups.
@@ -1046,7 +1046,7 @@ Only JSON.
                 _detect_log(f"Sending to model... (try {retry_count + 1})")
 
                 response = client.models.generate_content(
-                    model="gemma-3-27b-it",
+                    model="gemma-4-31b-it",
                     contents=[
                         prompt,
                         genai.types.Part.from_bytes(
@@ -1099,7 +1099,7 @@ Only JSON.
 """
 
                     fallback_response = client.models.generate_content(
-                        model="gemma-3-27b-it",
+                        model="gemma-4-31b-it",
                         contents=[
                             fallback_prompt,
                             genai.types.Part.from_bytes(
