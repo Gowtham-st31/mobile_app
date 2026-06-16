@@ -509,8 +509,9 @@ def _send_fcm_push_to_all(db, *, title: str, body: str, data=None):
 IST = pytz.timezone('Asia/Kolkata')
 
 # --- AI (Gemini) configuration ---
-# Default model: Gemma 3 4B IT (instruction-tuned chat).
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemma-3-27b-it").strip() or "gemma-3-27b-it"
+# Default model: Gemma 3 27B IT (instruction-tuned chat).
+# Hardcoding to 'gemma-3-27b-it' to override any environment variable issues on Render.
+GEMINI_MODEL = "gemma-3-27b-it"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # Conservative defaults to avoid token/context blowups.
