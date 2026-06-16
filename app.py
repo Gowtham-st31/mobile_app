@@ -573,7 +573,8 @@ def call_gemini_text(
     while True:
         attempt += 1
         try:
-            response = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=60)
+            # Increased timeout to 180 as heavier models like 31b take much longer to generate responses.
+            response = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=180)
         except requests.exceptions.RequestException as exc:
             # Network error: don't retry endlessly; surface it.
             raise RuntimeError(f"Failed to reach Gemini API: {exc}") from exc
