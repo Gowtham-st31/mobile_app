@@ -137,7 +137,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Logout failed').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Logout failed';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Logout failed';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -151,7 +151,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to load profile').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to load profile';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to load profile';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -167,7 +167,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to register push token').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to register push token';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to register push token';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -196,7 +196,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to add data').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to add data';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to add data';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -205,6 +205,7 @@ class ApiClient {
     required File videoFile,
     required String shift,
     DetectVideoProgressCallback? onProgress,
+    CancelToken? cancelToken,
   }) async {
     try {
       int clampPercent(int value) {
@@ -340,6 +341,7 @@ class ApiClient {
           sendTimeout: const Duration(minutes: 30),
           receiveTimeout: const Duration(minutes: 30),
         ),
+        cancelToken: cancelToken,
         onSendProgress: (sent, total) {
           if (total <= 0) return;
           final uploadPercent = ((sent / total) * 100).round();
@@ -379,6 +381,7 @@ class ApiClient {
           final pollResponse = await _dio.get(
             '/detect-video-progress/$jobId',
             options: Options(receiveTimeout: const Duration(minutes: 30)),
+            cancelToken: cancelToken,
           );
 
           final pollPayload = pollResponse.data;
@@ -414,6 +417,9 @@ class ApiClient {
     } on ApiException {
       rethrow;
     } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) {
+        throw const ApiException('Auto-detection cancelled.');
+      }
       final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to detect video data';
       throw ApiException(message, statusCode: e.response?.statusCode);
     } catch (_) {
@@ -450,7 +456,7 @@ class ApiClient {
       if (inserted is num) return inserted.toInt();
       return int.tryParse(inserted?.toString() ?? '0') ?? 0;
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to add video rows';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to add video rows';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -480,7 +486,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to generate report').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to generate report';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to generate report';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -502,6 +508,10 @@ class ApiClient {
           'from_date': fromDateYYYYMMDD,
           'to_date': toDateYYYYMMDD,
         }),
+        options: Options(
+          receiveTimeout: const Duration(minutes: 5),
+          sendTimeout: const Duration(minutes: 5),
+        ),
       );
 
       final data = (response.data as Map).cast<String, dynamic>();
@@ -513,7 +523,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to generate AI analysis').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to generate AI analysis';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to generate AI analysis';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -523,6 +533,10 @@ class ApiClient {
       final response = await _dio.post(
         '/analyze_report_with_ai/ask_question',
         data: FormData.fromMap({'question': question}),
+        options: Options(
+          receiveTimeout: const Duration(minutes: 5),
+          sendTimeout: const Duration(minutes: 5),
+        ),
       );
 
       final data = (response.data as Map).cast<String, dynamic>();
@@ -534,21 +548,27 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to get AI answer').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to get AI answer';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to get AI answer';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
 
   Future<String> suggestLoomerName() async {
     try {
-      final response = await _dio.post('/admin/suggest_loomer_name');
+      final response = await _dio.post(
+        '/admin/suggest_loomer_name',
+        options: Options(
+          receiveTimeout: const Duration(minutes: 2),
+          sendTimeout: const Duration(minutes: 2),
+        ),
+      );
       final data = (response.data as Map).cast<String, dynamic>();
       if (data['status'] == 'success' && data['suggested_name'] != null) {
         return data['suggested_name'].toString();
       }
       throw ApiException((data['message'] ?? 'Failed to suggest name').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to suggest name';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to suggest name';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -576,7 +596,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to load graph data').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to load graph data';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to load graph data';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -647,7 +667,7 @@ class ApiClient {
         }
       }
 
-      final message = _extractMessage(e) ?? 'Failed to download PDF';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to download PDF';
       throw ApiException(message, statusCode: status);
     }
   }
@@ -662,7 +682,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to load users').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to load users';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to load users';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -678,7 +698,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to load current warp').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to load current warp';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to load current warp';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -706,7 +726,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to update warp').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to update warp';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to update warp';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -732,7 +752,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to calculate knotting').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to calculate knotting';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to calculate knotting';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -749,7 +769,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to load warp history').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to load warp history';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to load warp history';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -761,7 +781,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to clear warp history').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to clear warp history';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to clear warp history';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -778,7 +798,7 @@ class ApiClient {
       }
       throw ApiException((data['message'] ?? 'Failed to load messages').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to load messages';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to load messages';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -794,7 +814,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to send message').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to send message';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to send message';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -806,7 +826,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to delete message').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to delete message';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to delete message';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -829,7 +849,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to add user').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to add user';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to add user';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -852,7 +872,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to update password').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to update password';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to update password';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -867,7 +887,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to remove user').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to remove user';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to remove user';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }
@@ -894,7 +914,7 @@ class ApiClient {
       if (data['status'] == 'success') return;
       throw ApiException((data['message'] ?? 'Failed to remove data').toString(), statusCode: response.statusCode);
     } on DioException catch (e) {
-      final message = _extractMessage(e) ?? 'Failed to remove data';
+      final message = _extractMessage(e) ?? _friendlyNetworkMessage(e) ?? 'Failed to remove data';
       throw ApiException(message, statusCode: e.response?.statusCode);
     }
   }

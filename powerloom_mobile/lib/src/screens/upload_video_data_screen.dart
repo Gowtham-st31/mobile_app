@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
 import '../models/session.dart';
+import '../services/video_detection_service.dart';
 
 class UploadVideoDataScreen extends StatefulWidget {
   final AppController controller;
@@ -42,9 +43,13 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   bool _cameraInitializing = false;
   bool _recording = false;
   bool _recordingPaused = false;
+  int _compressProgress = 0;
   int _uploadProgress = 0;
   int _detectProgress = 0;
   String _detectPhase = '';
+  bool _handlingTerminal = false;
+
+  final VideoDetectionService _detection = VideoDetectionService.instance;
 
   File? _selectedVideoFile;
 
@@ -72,10 +77,17 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       controller.text = _metersController.text;
       controller.selection = TextSelection.collapsed(offset: controller.text.length);
     });
+
+    // Attach to the background detection job so progress/results keep flowing
+    // even if this screen was rebuilt after navigating away.
+    _detection.state.addListener(_onDetectionStateChanged);
+    _detection.loadPersisted();
+    _onDetectionStateChanged();
   }
 
   @override
   void dispose() {
+    _detection.state.removeListener(_onDetectionStateChanged);
     _disposeCamera();
     _clearDetectedRows();
 
@@ -84,6 +96,50 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     _metersController.dispose();
     _salaryController.dispose();
     super.dispose();
+  }
+
+  void _onDetectionStateChanged() {
+    if (!mounted) return;
+    final s = _detection.state.value;
+
+    setState(() {
+      _detecting = s.isActive;
+      _compressProgress = s.compress;
+      _uploadProgress = s.upload;
+      _detectProgress = s.detect;
+      _detectPhase = s.isActive ? s.phase : '';
+      if ((_shift == null || _shift!.isEmpty) && s.shift != null && s.shift!.isNotEmpty) {
+        _shift = _normalizeShiftValue(s.shift);
+      }
+    });
+
+    if (s.isTerminal && !_handlingTerminal) {
+      _handlingTerminal = true;
+      switch (s.phase) {
+        case DetectionPhase.completed:
+          if (s.rows.isEmpty) {
+            _showMessage('No rows detected from this video.');
+          } else {
+            try {
+              _applyDetectedRows(s.rows);
+              _showMessage('${s.rows.length} rows detected. You can edit before submitting.');
+            } catch (_) {
+              _showMessage('No valid rows detected from this video.');
+            }
+          }
+          break;
+        case DetectionPhase.error:
+          _showMessage(s.message ?? 'Failed to detect data from video.');
+          break;
+        case DetectionPhase.cancelled:
+          _showMessage('Auto-detection cancelled.');
+          break;
+      }
+      // Reset the service to idle so we don't re-handle the same result.
+      _detection.acknowledge().whenComplete(() {
+        _handlingTerminal = false;
+      });
+    }
   }
 
   void _showMessage(String text) {
@@ -328,6 +384,11 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   }
 
   Future<void> _runDetection({bool autoTriggered = false}) async {
+    if (_detection.state.value.isActive) {
+      _showMessage('A detection is already running.');
+      return;
+    }
+
     final file = _selectedVideoFile;
     if (file == null) {
       if (!autoTriggered) {
@@ -351,42 +412,35 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       return;
     }
 
-    setState(() {
-      _detecting = true;
-      _uploadProgress = 0;
-      _detectProgress = 0;
-      _detectPhase = 'uploading';
-    });
+    // Make sure stale results from a previous run don't get re-applied.
+    _handlingTerminal = false;
+
     try {
-      final rows = await widget.controller.api.detectVideoData(
-        videoFile: file,
+      await _detection.start(
+        baseUrl: widget.controller.baseUrl,
+        videoPath: file.path,
         shift: selectedShift,
-        onProgress: (uploadPercent, detectPercent, phase) {
-          if (!mounted) return;
-          setState(() {
-            _uploadProgress = uploadPercent;
-            _detectProgress = detectPercent;
-            _detectPhase = phase;
-          });
-        },
       );
-
-      if (rows.isEmpty) {
-        _showMessage('No rows detected from this video.');
-        return;
-      }
-
-      _applyDetectedRows(rows);
-      _showMessage('${rows.length} rows detected. You can edit before submitting.');
+      _showMessage('Upload started. It keeps running in the background — you can leave this page.');
     } catch (e) {
-      _showMessage(e.toString());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _detecting = false;
-          _detectPhase = '';
-        });
-      }
+      _showMessage('Could not start detection: $e');
+    }
+  }
+
+  Future<void> _cancelDetection() async {
+    await _detection.cancel();
+  }
+
+  String _phaseLabel(String phase) {
+    switch (phase) {
+      case DetectionPhase.compressing:
+        return 'Optimising video for a faster upload...';
+      case DetectionPhase.uploading:
+        return 'Uploading to server...';
+      case DetectionPhase.detecting:
+        return 'Processing frames on server...';
+      default:
+        return 'Working...';
     }
   }
 
@@ -534,7 +588,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                     FilledButton.icon(
                       onPressed: (_detecting || _submitting) ? null : () => _runDetection(autoTriggered: false),
                       icon: const Icon(Icons.search),
-                      label: Text(_detecting ? 'Detecting... ${_detectProgress.clamp(0, 100)}%' : 'Auto Detect from Video'),
+                      label: Text(_detecting ? 'Running in background...' : 'Auto Detect from Video'),
                     ),
                   ],
                 ),
@@ -557,6 +611,38 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Running in background',
+                                style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _cancelDetection,
+                              icon: const Icon(Icons.close),
+                              label: const Text('Cancel'),
+                              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'You can leave this page or minimise the app — it keeps going. '
+                          'It only stops if you cancel or fully close the app.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 12),
+
+                        Text(
+                          'Compressing video... ${_compressProgress.clamp(0, 100)}%',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        LinearProgressIndicator(value: _compressProgress.clamp(0, 100) / 100),
+                        const SizedBox(height: 12),
+
                         Text(
                           'Uploading video... ${_uploadProgress.clamp(0, 100)}%',
                           style: Theme.of(context).textTheme.bodyMedium,
@@ -573,7 +659,7 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                         if (_detectPhase.trim().isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Text(
-                            _detectPhase == 'uploading' ? 'Uploading to server...' : 'Processing frames on server...',
+                            _phaseLabel(_detectPhase),
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],

@@ -10,6 +10,7 @@ import 'src/screens/home_shell.dart';
 import 'src/screens/login_screen.dart';
 import 'src/screens/update_required_screen.dart';
 import 'src/services/app_update_service.dart';
+import 'src/services/video_detection_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -22,6 +23,10 @@ Future<void> main() async {
 
   await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // Configure the background video detection service (compress + upload + detect
+  // continues in a foreground service even if the user leaves the page/app).
+  await VideoDetectionService.instance.configure();
 
   // Default base URL:
   // - Release builds: Render deployment (HTTPS)
