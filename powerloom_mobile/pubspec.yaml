@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.11+21
+version: 1.0.12+22
 
 environment:
   sdk: ^3.7.0
@@ -48,10 +48,6 @@ dependencies:
   url_launcher: ^6.3.2
   camera: ^0.11.0+2
   image_picker: ^1.1.2
-
-  # video_compress shrinks the recorded/picked video before upload so the upload
-  # finishes much faster, even on good networks where large files are the bottleneck.
-  video_compress: ^3.1.4
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

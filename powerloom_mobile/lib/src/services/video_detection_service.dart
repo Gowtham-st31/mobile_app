@@ -6,7 +6,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:video_compress/video_compress.dart';
 
 import '../api/api_client.dart';
 
@@ -273,14 +272,14 @@ class VideoDetectionService {
     _cancelToken = CancelToken();
 
     _setState(VideoDetectionState(
-      phase: DetectionPhase.compressing,
+      phase: DetectionPhase.uploading,
       shift: shift,
       videoName: videoName,
     ));
     await _clearProgressNotification();
     await _showProgressNotification(
-      title: 'Compressing video',
-      content: 'Optimising for upload...',
+      title: 'Uploading video',
+      content: 'Uploading to server...',
       progress: 0,
       indeterminate: true,
     );
@@ -300,53 +299,16 @@ class VideoDetectionService {
     required String videoName,
   }) async {
     final cancelToken = _cancelToken!;
-    MediaInfo? compressed;
-    String workingPath = videoPath;
-    Subscription? progressSub;
 
     try {
       if (!File(videoPath).existsSync()) {
         throw const ApiException('Selected video is no longer available.');
       }
 
-      // ---- 1) Compress for a faster upload ----
-      progressSub = VideoCompress.compressProgress$.subscribe((progress) {
-        if (cancelToken.isCancelled) return;
-        final pct = progress.round().clamp(0, 100);
-        _setState(state.value.copyWith(phase: DetectionPhase.compressing, compress: pct));
-        _showProgressNotification(
-          title: 'Compressing video',
-          content: 'Optimising for upload... $pct%',
-          progress: pct,
-        );
-      });
-
-      try {
-        compressed = await VideoCompress.compressVideo(
-          videoPath,
-          quality: VideoQuality.MediumQuality,
-          deleteOrigin: false,
-          includeAudio: true,
-        );
-      } catch (_) {
-        compressed = null; // Fall back to the original on any compression failure.
-      } finally {
-        progressSub.unsubscribe();
-        progressSub = null;
-      }
-
-      if (cancelToken.isCancelled) {
-        await _finishCancelled(shift, videoName);
-        return;
-      }
-
-      final cp = compressed?.path;
-      if (cp != null && File(cp).existsSync()) workingPath = cp;
-      _setState(state.value.copyWith(phase: DetectionPhase.compressing, compress: 100));
-
-      // ---- 2) Upload + 3) server-side detection ----
+      // Upload the ORIGINAL video (no compression) so the meter digits stay
+      // sharp and the server-side detection reads them correctly.
       final rows = await api.detectVideoData(
-        videoFile: File(workingPath),
+        videoFile: File(videoPath),
         shift: shift,
         cancelToken: cancelToken,
         onProgress: (uploadPercent, detectPercent, phase) {
@@ -354,7 +316,6 @@ class VideoDetectionService {
           if (phase == 'uploading') {
             _setState(state.value.copyWith(
               phase: DetectionPhase.uploading,
-              compress: 100,
               upload: uploadPercent,
             ));
             _showProgressNotification(
@@ -365,7 +326,6 @@ class VideoDetectionService {
           } else {
             _setState(state.value.copyWith(
               phase: DetectionPhase.detecting,
-              compress: 100,
               upload: 100,
               detect: detectPercent,
             ));
@@ -386,7 +346,6 @@ class VideoDetectionService {
 
       _setState(VideoDetectionState(
         phase: DetectionPhase.completed,
-        compress: 100,
         upload: 100,
         detect: 100,
         shift: shift,
@@ -426,13 +385,6 @@ class VideoDetectionService {
         await _showResultNotification('Detection failed', msg);
       }
     } finally {
-      progressSub?.unsubscribe();
-      try {
-        final p = compressed?.path;
-        if (p != null && p != videoPath && File(p).existsSync()) {
-          await File(p).delete();
-        }
-      } catch (_) {}
       _running = false;
       _cancelToken = null;
     }
@@ -450,9 +402,6 @@ class VideoDetectionService {
 
   /// Cancels a running job (upload or detection).
   Future<void> cancel() async {
-    try {
-      await VideoCompress.cancelCompression();
-    } catch (_) {}
     _cancelToken?.cancel('cancelled');
     await _clearProgressNotification();
     if (!_running && state.value.isActive) {

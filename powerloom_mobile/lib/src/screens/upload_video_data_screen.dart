@@ -43,7 +43,6 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
   bool _cameraInitializing = false;
   bool _recording = false;
   bool _recordingPaused = false;
-  int _compressProgress = 0;
   int _uploadProgress = 0;
   int _detectProgress = 0;
   String _detectPhase = '';
@@ -103,7 +102,6 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
 
     setState(() {
       _detecting = s.isActive;
-      _compressProgress = s.compress;
       _uploadProgress = s.upload;
       _detectProgress = s.detect;
       _detectPhase = s.isActive ? s.phase : '';
@@ -631,14 +629,6 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                           'cancel or close the app.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        const SizedBox(height: 12),
-
-                        Text(
-                          'Compressing video... ${_compressProgress.clamp(0, 100)}%',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 6),
-                        LinearProgressIndicator(value: _compressProgress.clamp(0, 100) / 100),
                         const SizedBox(height: 12),
 
                         Text(
