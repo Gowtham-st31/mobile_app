@@ -665,8 +665,8 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set on the server.")
     VIDEO_PATH = video_path
-    FRAME_SKIP = 20
-    MAX_RETRIES = 3
+    FRAME_SKIP = 15
+    MAX_RETRIES = 4
     MIN_MODEL_CONFIDENCE = float(os.getenv("MIN_MODEL_CONFIDENCE", "0.85"))
     MIN_LAPLACIAN_VARIANCE = float(os.getenv("MIN_LAPLACIAN_VARIANCE", "90.0"))
     MAX_MOTION_RATIO = float(os.getenv("MAX_MOTION_RATIO", "0.30"))

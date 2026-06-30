@@ -225,7 +225,9 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
       final controller = CameraController(
         selected,
         ResolutionPreset.medium,
-        enableAudio: true,
+        // Meter detection never uses audio, so we drop the audio track to make
+        // the recorded file smaller and the upload faster — no quality/flow impact.
+        enableAudio: false,
       );
 
       await controller.initialize();
