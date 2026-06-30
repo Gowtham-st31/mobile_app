@@ -990,6 +990,38 @@ No markdown.
 Only JSON.
 """
 
+    from collections import deque
+
+    # ----- Quality-aware sampling -----
+    # Instead of blindly taking every Nth frame (which can land on a blurry frame
+    # while the loom number is changing), look at a small window of frames around
+    # each sample point and pick the SHARPEST one (highest Laplacian variance).
+    # The cadence is then re-anchored from the chosen frame so spacing stays
+    # ~FRAME_SKIP (e.g. nudging +2 makes the next step +13; nudging -2 makes it +17).
+    WINDOW_RADIUS = 2
+
+    def _frame_sharpness(frame_bgr):
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    def _select_sharpest_frame(target_index, window):
+        candidates = [
+            (i, f) for (i, f) in window
+            if target_index - WINDOW_RADIUS <= i <= target_index + WINDOW_RADIUS
+        ]
+        if not candidates:
+            return None
+        best_index, best_frame, best_lap = None, None, -1.0
+        for (i, f) in candidates:
+            lap = _frame_sharpness(f)
+            if lap > best_lap:
+                best_lap, best_index, best_frame = lap, i, f
+        return best_index, best_frame
+
+    frame_window = deque(maxlen=2 * WINDOW_RADIUS + 1)
+    next_sample_at = FRAME_SKIP
+    read_index = 0
+
     _detect_log("Started processing...\n")
 
     while True:
@@ -997,10 +1029,24 @@ Only JSON.
         if not ret:
             break
 
-        frame_count += 1
+        read_index += 1
+        frame_window.append((read_index, frame))
 
-        if frame_count % FRAME_SKIP != 0:
+        # Wait until the full ±WINDOW_RADIUS window around the sample point is buffered.
+        if read_index < next_sample_at + WINDOW_RADIUS:
             continue
+
+        selection = _select_sharpest_frame(next_sample_at, frame_window)
+        if selection is None:
+            next_sample_at += FRAME_SKIP
+            continue
+
+        chosen_index, chosen_frame = selection
+        frame = chosen_frame
+        frame_count = chosen_index
+
+        # Re-anchor the cadence from the chosen (sharpest) frame.
+        next_sample_at = chosen_index + FRAME_SKIP
 
         processed_detect_frames += 1
         _emit_detect_progress(processed_detect_frames, total_detect_frames)
