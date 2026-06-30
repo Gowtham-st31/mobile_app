@@ -1,18 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_compress/video_compress.dart';
 
 import '../api/api_client.dart';
 
-/// Phases the background video detection job moves through.
+/// Phases the video detection job moves through.
 class DetectionPhase {
   static const String idle = 'idle';
   static const String compressing = 'compressing';
@@ -23,7 +21,7 @@ class DetectionPhase {
   static const String cancelled = 'cancelled';
 }
 
-/// Immutable snapshot of the background detection job.
+/// Immutable snapshot of the detection job, observed by the UI.
 @immutable
 class VideoDetectionState {
   final String phase;
@@ -57,6 +55,28 @@ class VideoDetectionState {
       phase == DetectionPhase.completed ||
       phase == DetectionPhase.error ||
       phase == DetectionPhase.cancelled;
+
+  VideoDetectionState copyWith({
+    String? phase,
+    int? compress,
+    int? upload,
+    int? detect,
+    String? message,
+    String? shift,
+    String? videoName,
+    List<Map<String, dynamic>>? rows,
+  }) {
+    return VideoDetectionState(
+      phase: phase ?? this.phase,
+      compress: compress ?? this.compress,
+      upload: upload ?? this.upload,
+      detect: detect ?? this.detect,
+      message: message ?? this.message,
+      shift: shift ?? this.shift,
+      videoName: videoName ?? this.videoName,
+      rows: rows ?? this.rows,
+    );
+  }
 
   Map<String, dynamic> toMap() => {
         'phase': phase,
@@ -104,322 +124,200 @@ class VideoDetectionState {
   }
 }
 
-/// Coordinates the background compress -> upload -> detect pipeline.
+/// Runs the compress -> upload -> detect pipeline.
 ///
-/// The heavy work runs in a separate background isolate via
-/// [FlutterBackgroundService] so it keeps going (with an ongoing notification)
-/// even when the user leaves the page or sends the app to the background.
-/// It only stops when the user taps Cancel or fully closes the app.
+/// The job is owned by this singleton (not the screen), so it keeps running when
+/// the user navigates away from the page. Progress, the cancel action and the
+/// detected rows are all driven from here so the UI updates reliably, and an
+/// ongoing notification shows progress in the status bar. The job stops on
+/// Cancel, on completion, or when the app process is fully closed.
 class VideoDetectionService {
   VideoDetectionService._();
   static final VideoDetectionService instance = VideoDetectionService._();
 
-  static const String notificationChannelId = 'video_detection_channel';
-  static const int notificationId = 778;
+  static const String _channelId = 'video_detection_channel';
+  static const String _channelName = 'Video Detection';
+  static const int _progressNotificationId = 778;
+  static const int _resultNotificationId = 779;
   static const String _prefsStateKey = 'video_detection_state';
-  static const String _prefsRequestKey = 'video_detection_request';
 
-  final FlutterBackgroundService _service = FlutterBackgroundService();
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
+
   final ValueNotifier<VideoDetectionState> state =
       ValueNotifier<VideoDetectionState>(const VideoDetectionState());
 
-  StreamSubscription<Map<String, dynamic>?>? _updateSub;
   bool _configured = false;
+  bool _running = false;
+  CancelToken? _cancelToken;
 
-  /// Must be called once during app startup (before runApp).
+  /// Call once during app startup, before runApp.
   Future<void> configure() async {
     if (_configured) return;
     _configured = true;
 
-    // Ensure the notification channel exists with an importance Android accepts
-    // for a foreground service notification.
-    final localNotifications = FlutterLocalNotificationsPlugin();
-    const channel = AndroidNotificationChannel(
-      notificationChannelId,
-      'Video Detection',
-      description: 'Shows progress while uploading and detecting loom data.',
-      importance: Importance.low,
-    );
-    await localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
-
-    await _service.configure(
-      androidConfiguration: AndroidConfiguration(
-        onStart: _onStart,
-        autoStart: false,
-        isForegroundMode: true,
-        notificationChannelId: notificationChannelId,
-        initialNotificationTitle: 'Video detection',
-        initialNotificationContent: 'Preparing...',
-        foregroundServiceNotificationId: notificationId,
-        foregroundServiceTypes: [AndroidForegroundType.dataSync],
-      ),
-      iosConfiguration: IosConfiguration(
-        autoStart: false,
-        onForeground: _onStart,
-        onBackground: _onIosBackground,
+    await _notifications.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
     );
 
-    // Restore any persisted state (e.g. a job that finished while the UI was gone).
-    await loadPersisted();
+    final android = _notifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _channelId,
+        _channelName,
+        description: 'Shows progress while uploading and detecting loom data.',
+        importance: Importance.low,
+      ),
+    );
+    await android?.requestNotificationsPermission();
 
-    // Listen for live progress updates coming from the background isolate.
-    _updateSub?.cancel();
-    _updateSub = _service.on('update').listen((event) {
-      if (event == null) return;
-      state.value = VideoDetectionState.fromMap(event);
-    });
+    await _loadPersisted();
   }
 
-  /// Re-reads the last persisted job state. Useful when returning to the screen
-  /// after the background isolate produced a result while the UI wasn't listening.
-  Future<void> loadPersisted() async {
+  Future<void> _loadPersisted() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
       final raw = prefs.getString(_prefsStateKey);
       if (raw == null || raw.trim().isEmpty) return;
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
-        state.value = VideoDetectionState.fromMap(decoded);
+        final restored = VideoDetectionState.fromMap(decoded);
+        // Only restore terminal results (an active job can't survive a process kill).
+        if (restored.isTerminal) state.value = restored;
       }
-    } catch (_) {
-      // Ignore: keep current in-memory state.
-    }
-  }
-
-  /// Starts (or queues) a detection job for [videoPath].
-  Future<void> start({
-    required String baseUrl,
-    required String videoPath,
-    required String shift,
-  }) async {
-    await configure();
-
-    final videoName = videoPath.split(Platform.pathSeparator).last;
-
-    // Optimistic local state so the UI reacts immediately.
-    state.value = VideoDetectionState(
-      phase: DetectionPhase.compressing,
-      shift: shift,
-      videoName: videoName,
-    );
-
-    final request = <String, dynamic>{
-      'baseUrl': baseUrl,
-      'videoPath': videoPath,
-      'shift': shift,
-      'videoName': videoName,
-    };
-
-    // Persist the request so the background isolate can pick it up even if the
-    // invoke below races the isolate startup.
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_prefsRequestKey, jsonEncode(request));
-      await prefs.setString(_prefsStateKey, jsonEncode(state.value.toMap()));
-    } catch (_) {
-      // Non-fatal.
-    }
-
-    final running = await _service.isRunning();
-    if (!running) {
-      await _service.startService();
-    }
-    // Nudge the isolate (handles the already-running case too).
-    _service.invoke('startDetection', request);
-  }
-
-  /// Requests cancellation of the running job and stops the service.
-  Future<void> cancel() async {
-    _service.invoke('cancel');
-    // Reflect cancellation locally right away.
-    final current = state.value;
-    if (current.isActive) {
-      state.value = VideoDetectionState(
-        phase: DetectionPhase.cancelled,
-        message: 'Cancelled.',
-        shift: current.shift,
-        videoName: current.videoName,
-      );
-    }
-  }
-
-  /// Clears a terminal (completed/error/cancelled) state back to idle so the UI
-  /// doesn't keep re-applying the same result.
-  Future<void> acknowledge() async {
-    state.value = const VideoDetectionState();
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_prefsStateKey);
-      await prefs.remove(_prefsRequestKey);
     } catch (_) {
       // Ignore.
     }
   }
-}
 
-// ---------------------------------------------------------------------------
-// Background isolate entry points
-// ---------------------------------------------------------------------------
+  void _setState(VideoDetectionState s) {
+    state.value = s;
+    _persist(s);
+  }
 
-@pragma('vm:entry-point')
-Future<bool> _onIosBackground(ServiceInstance service) async {
-  WidgetsFlutterBinding.ensureInitialized();
-  DartPluginRegistrant.ensureInitialized();
-  return true;
-}
-
-@pragma('vm:entry-point')
-void _onStart(ServiceInstance service) async {
-  DartPluginRegistrant.ensureInitialized();
-
-  bool busy = false;
-  CancelToken? activeToken;
-
-  final resultNotifier = FlutterLocalNotificationsPlugin();
-  bool resultNotifierInited = false;
-
-  Future<void> showResultNotification(String title, String body) async {
+  Future<void> _persist(VideoDetectionState s) async {
     try {
-      if (!resultNotifierInited) {
-        await resultNotifier.initialize(
-          const InitializationSettings(
-            android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-          ),
-        );
-        resultNotifierInited = true;
-      }
-      await resultNotifier.show(
-        VideoDetectionService.notificationId + 1,
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsStateKey, jsonEncode(s.toMap()));
+    } catch (_) {}
+  }
+
+  Future<void> _showProgressNotification({
+    required String title,
+    required String content,
+    required int progress,
+    bool indeterminate = false,
+  }) async {
+    try {
+      final androidDetails = AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Shows progress while uploading and detecting loom data.',
+        importance: Importance.low,
+        priority: Priority.low,
+        ongoing: true,
+        autoCancel: false,
+        onlyAlertOnce: true,
+        showProgress: true,
+        maxProgress: 100,
+        progress: progress.clamp(0, 100),
+        indeterminate: indeterminate,
+      );
+      await _notifications.show(
+        _progressNotificationId,
+        title,
+        content,
+        NotificationDetails(android: androidDetails),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _clearProgressNotification() async {
+    try {
+      await _notifications.cancel(_progressNotificationId);
+    } catch (_) {}
+  }
+
+  Future<void> _showResultNotification(String title, String body) async {
+    try {
+      await _notifications.show(
+        _resultNotificationId,
         title,
         body,
         const NotificationDetails(
           android: AndroidNotificationDetails(
-            VideoDetectionService.notificationChannelId,
-            'Video Detection',
+            _channelId,
+            _channelName,
             importance: Importance.high,
             priority: Priority.high,
           ),
         ),
       );
-    } catch (_) {
-      // Best-effort: notification is non-critical.
-    }
+    } catch (_) {}
   }
 
-  Future<void> persistState(Map<String, dynamic> stateMap) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        VideoDetectionService._prefsStateKey,
-        jsonEncode(stateMap),
-      );
-    } catch (_) {
-      // Ignore persistence errors.
-    }
-  }
-
-  Future<void> emit({
-    required String phase,
-    int compress = 0,
-    int upload = 0,
-    int detect = 0,
-    String? message,
-    String? shift,
-    String? videoName,
-    List<Map<String, dynamic>> rows = const [],
+  /// Starts a detection job. Returns immediately; observe [state] for progress.
+  Future<void> start({
+    required ApiClient api,
+    required String videoPath,
+    required String shift,
   }) async {
-    final stateMap = <String, dynamic>{
-      'phase': phase,
-      'compress': compress,
-      'upload': upload,
-      'detect': detect,
-      'message': message,
-      'shift': shift,
-      'videoName': videoName,
-      'rows': jsonEncode(rows),
-    };
-    service.invoke('update', stateMap);
-    await persistState(stateMap);
+    await configure();
+    if (_running) return;
 
-    if (service is AndroidServiceInstance) {
-      String title;
-      String content;
-      switch (phase) {
-        case DetectionPhase.compressing:
-          title = 'Compressing video';
-          content = 'Optimising video for upload... $compress%';
-          break;
-        case DetectionPhase.uploading:
-          title = 'Uploading video';
-          content = 'Uploading to server... $upload%';
-          break;
-        case DetectionPhase.detecting:
-          title = 'Detecting loom data';
-          content = 'Processing on server... $detect%';
-          break;
-        case DetectionPhase.completed:
-          title = 'Detection complete';
-          content = '${rows.length} row(s) detected. Open the app to review.';
-          break;
-        case DetectionPhase.cancelled:
-          title = 'Detection cancelled';
-          content = 'The video detection was cancelled.';
-          break;
-        case DetectionPhase.error:
-          title = 'Detection failed';
-          content = message ?? 'Something went wrong.';
-          break;
-        default:
-          title = 'Video detection';
-          content = 'Working...';
-      }
-      service.setForegroundNotificationInfo(title: title, content: content);
-    }
+    final videoName = videoPath.split(Platform.pathSeparator).last;
+    _running = true;
+    _cancelToken = CancelToken();
+
+    _setState(VideoDetectionState(
+      phase: DetectionPhase.compressing,
+      shift: shift,
+      videoName: videoName,
+    ));
+    await _clearProgressNotification();
+    await _showProgressNotification(
+      title: 'Compressing video',
+      content: 'Optimising for upload...',
+      progress: 0,
+      indeterminate: true,
+    );
+
+    unawaited(_runPipeline(
+      api: api,
+      videoPath: videoPath,
+      shift: shift,
+      videoName: videoName,
+    ));
   }
 
-  Future<void> runJob(Map<dynamic, dynamic> request) async {
-    if (busy) return;
-    busy = true;
-
-    final baseUrl = (request['baseUrl'] ?? '').toString();
-    final videoPath = (request['videoPath'] ?? '').toString();
-    final shift = (request['shift'] ?? '').toString();
-    final videoName = (request['videoName'] ?? videoPath.split(Platform.pathSeparator).last).toString();
-
-    final cancelToken = CancelToken();
-    activeToken = cancelToken;
-
-    String workingPath = videoPath;
+  Future<void> _runPipeline({
+    required ApiClient api,
+    required String videoPath,
+    required String shift,
+    required String videoName,
+  }) async {
+    final cancelToken = _cancelToken!;
     MediaInfo? compressed;
+    String workingPath = videoPath;
+    Subscription? progressSub;
 
     try {
-      // Clear the stored request now that we've picked it up.
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove(VideoDetectionService._prefsRequestKey);
-      } catch (_) {}
-
-      if (baseUrl.isEmpty || videoPath.isEmpty || shift.isEmpty) {
-        throw const ApiException('Missing video, server URL or shift.');
-      }
       if (!File(videoPath).existsSync()) {
         throw const ApiException('Selected video is no longer available.');
       }
 
-      // ---- 1) Compress (makes the upload dramatically faster) ----
-      await emit(phase: DetectionPhase.compressing, compress: 0, shift: shift, videoName: videoName);
-
-      final progressSub = VideoCompress.compressProgress$.subscribe((progress) {
+      // ---- 1) Compress for a faster upload ----
+      progressSub = VideoCompress.compressProgress$.subscribe((progress) {
         if (cancelToken.isCancelled) return;
-        emit(
-          phase: DetectionPhase.compressing,
-          compress: progress.round().clamp(0, 100),
-          shift: shift,
-          videoName: videoName,
+        final pct = progress.round().clamp(0, 100);
+        _setState(state.value.copyWith(phase: DetectionPhase.compressing, compress: pct));
+        _showProgressNotification(
+          title: 'Compressing video',
+          content: 'Optimising for upload... $pct%',
+          progress: pct,
         );
       });
 
@@ -431,58 +329,62 @@ void _onStart(ServiceInstance service) async {
           includeAudio: true,
         );
       } catch (_) {
-        compressed = null; // Fall back to original on any compression failure.
+        compressed = null; // Fall back to the original on any compression failure.
       } finally {
         progressSub.unsubscribe();
+        progressSub = null;
       }
 
       if (cancelToken.isCancelled) {
-        await emit(phase: DetectionPhase.cancelled, message: 'Cancelled.', shift: shift, videoName: videoName);
+        await _finishCancelled(shift, videoName);
         return;
       }
 
-      final compressedPath = compressed?.path;
-      if (compressedPath != null && File(compressedPath).existsSync()) {
-        workingPath = compressedPath;
-      }
-      await emit(phase: DetectionPhase.compressing, compress: 100, shift: shift, videoName: videoName);
+      final cp = compressed?.path;
+      if (cp != null && File(cp).existsSync()) workingPath = cp;
+      _setState(state.value.copyWith(phase: DetectionPhase.compressing, compress: 100));
 
-      // ---- 2) Upload + 3) server-side detection (with progress polling) ----
-      final client = await ApiClient.create(baseUrl: baseUrl);
-
-      final rows = await client.detectVideoData(
+      // ---- 2) Upload + 3) server-side detection ----
+      final rows = await api.detectVideoData(
         videoFile: File(workingPath),
         shift: shift,
         cancelToken: cancelToken,
         onProgress: (uploadPercent, detectPercent, phase) {
           if (cancelToken.isCancelled) return;
           if (phase == 'uploading') {
-            emit(
+            _setState(state.value.copyWith(
               phase: DetectionPhase.uploading,
               compress: 100,
               upload: uploadPercent,
-              shift: shift,
-              videoName: videoName,
+            ));
+            _showProgressNotification(
+              title: 'Uploading video',
+              content: 'Uploading to server... $uploadPercent%',
+              progress: uploadPercent,
             );
           } else {
-            emit(
+            _setState(state.value.copyWith(
               phase: DetectionPhase.detecting,
               compress: 100,
               upload: 100,
               detect: detectPercent,
-              shift: shift,
-              videoName: videoName,
+            ));
+            _showProgressNotification(
+              title: 'Detecting loom data',
+              content: 'Processing on server... $detectPercent%',
+              progress: detectPercent,
+              indeterminate: detectPercent <= 0,
             );
           }
         },
       );
 
       if (cancelToken.isCancelled) {
-        await emit(phase: DetectionPhase.cancelled, message: 'Cancelled.', shift: shift, videoName: videoName);
+        await _finishCancelled(shift, videoName);
         return;
       }
 
-      await emit(
+      _setState(VideoDetectionState(
         phase: DetectionPhase.completed,
         compress: 100,
         upload: 100,
@@ -490,75 +392,83 @@ void _onStart(ServiceInstance service) async {
         shift: shift,
         videoName: videoName,
         rows: rows,
-      );
-      await showResultNotification(
+      ));
+      await _clearProgressNotification();
+      await _showResultNotification(
         'Detection complete',
         '${rows.length} row(s) detected. Open the app to review and submit.',
       );
     } on ApiException catch (e) {
       if (cancelToken.isCancelled) {
-        await emit(phase: DetectionPhase.cancelled, message: 'Cancelled.', shift: shift, videoName: videoName);
+        await _finishCancelled(shift, videoName);
       } else {
-        await emit(phase: DetectionPhase.error, message: e.message, shift: shift, videoName: videoName);
-        await showResultNotification('Detection failed', e.message);
+        _setState(VideoDetectionState(
+          phase: DetectionPhase.error,
+          message: e.message,
+          shift: shift,
+          videoName: videoName,
+        ));
+        await _clearProgressNotification();
+        await _showResultNotification('Detection failed', e.message);
       }
-    } catch (e) {
+    } catch (_) {
       if (cancelToken.isCancelled) {
-        await emit(phase: DetectionPhase.cancelled, message: 'Cancelled.', shift: shift, videoName: videoName);
+        await _finishCancelled(shift, videoName);
       } else {
-        await emit(phase: DetectionPhase.error, message: 'Failed to detect data from video.', shift: shift, videoName: videoName);
-        await showResultNotification('Detection failed', 'Failed to detect data from video.');
+        const msg = 'Failed to detect data from video.';
+        _setState(VideoDetectionState(
+          phase: DetectionPhase.error,
+          message: msg,
+          shift: shift,
+          videoName: videoName,
+        ));
+        await _clearProgressNotification();
+        await _showResultNotification('Detection failed', msg);
       }
     } finally {
-      // Clean up the compressed temp file (keep the user's original).
+      progressSub?.unsubscribe();
       try {
         final p = compressed?.path;
         if (p != null && p != videoPath && File(p).existsSync()) {
           await File(p).delete();
         }
       } catch (_) {}
-
-      busy = false;
-      activeToken = null;
-
-      // Give the platform a moment to deliver the final notification/update,
-      // then stop the foreground service so it no longer holds resources.
-      await Future.delayed(const Duration(seconds: 2));
-      service.stopSelf();
+      _running = false;
+      _cancelToken = null;
     }
   }
 
-  service.on('startDetection').listen((event) {
-    if (event == null) return;
-    runJob(event);
-  });
+  Future<void> _finishCancelled(String shift, String videoName) async {
+    _setState(VideoDetectionState(
+      phase: DetectionPhase.cancelled,
+      message: 'Cancelled.',
+      shift: shift,
+      videoName: videoName,
+    ));
+    await _clearProgressNotification();
+  }
 
-  service.on('cancel').listen((event) async {
-    final token = activeToken;
+  /// Cancels a running job (upload or detection).
+  Future<void> cancel() async {
     try {
       await VideoCompress.cancelCompression();
     } catch (_) {}
-    if (token != null && !token.isCancelled) {
-      token.cancel('cancelled');
+    _cancelToken?.cancel('cancelled');
+    await _clearProgressNotification();
+    if (!_running && state.value.isActive) {
+      _setState(state.value.copyWith(phase: DetectionPhase.cancelled, message: 'Cancelled.'));
     }
-  });
+  }
 
-  service.on('stopService').listen((event) {
-    service.stopSelf();
-  });
-
-  // Handle a request that may have been queued before our listeners attached.
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final raw = prefs.getString(VideoDetectionService._prefsRequestKey);
-    if (raw != null && raw.trim().isNotEmpty) {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        runJob(decoded);
-      }
-    }
-  } catch (_) {
-    // Ignore.
+  /// Resets a terminal state back to idle so results aren't re-applied.
+  Future<void> acknowledge() async {
+    state.value = const VideoDetectionState();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefsStateKey);
+    } catch (_) {}
+    try {
+      await _notifications.cancel(_resultNotificationId);
+    } catch (_) {}
   }
 }

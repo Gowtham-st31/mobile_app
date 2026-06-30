@@ -81,7 +81,6 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
     // Attach to the background detection job so progress/results keep flowing
     // even if this screen was rebuilt after navigating away.
     _detection.state.addListener(_onDetectionStateChanged);
-    _detection.loadPersisted();
     _onDetectionStateChanged();
   }
 
@@ -417,11 +416,10 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
 
     try {
       await _detection.start(
-        baseUrl: widget.controller.baseUrl,
+        api: widget.controller.api,
         videoPath: file.path,
         shift: selectedShift,
       );
-      _showMessage('Upload started. It keeps running in the background — you can leave this page.');
     } catch (e) {
       _showMessage('Could not start detection: $e');
     }
@@ -629,8 +627,8 @@ class _UploadVideoDataScreenState extends State<UploadVideoDataScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'You can leave this page or minimise the app — it keeps going. '
-                          'It only stops if you cancel or fully close the app.',
+                          'Keeps running if you leave this page. It only stops if you '
+                          'cancel or close the app.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                         const SizedBox(height: 12),

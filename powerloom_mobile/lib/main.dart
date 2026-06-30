@@ -24,8 +24,9 @@ Future<void> main() async {
   await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  // Configure the background video detection service (compress + upload + detect
-  // continues in a foreground service even if the user leaves the page/app).
+  // Configure the video detection service (compress + upload + detect runs in
+  // the main isolate and continues even if the user leaves the page; progress is
+  // shown in an ongoing notification).
   await VideoDetectionService.instance.configure();
 
   // Default base URL:

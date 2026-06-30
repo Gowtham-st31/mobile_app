@@ -49,11 +49,6 @@ dependencies:
   camera: ^0.11.0+2
   image_picker: ^1.1.2
 
-  # Background upload + auto-detection pipeline.
-  # flutter_background_service keeps the compress/upload/detect work running in a
-  # foreground service (with an ongoing notification) even when the user leaves the
-  # page or backgrounds the app. It only stops on cancel or full app close.
-  flutter_background_service: ^5.1.0
   # video_compress shrinks the recorded/picked video before upload so the upload
   # finishes much faster, even on good networks where large files are the bottleneck.
   video_compress: ^3.1.4
