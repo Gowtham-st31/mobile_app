@@ -654,8 +654,11 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
     from google import genai
 
     global round_tracker
+    # Single shared alternation counter for the whole extraction run, so the
+    # .5 down/up alternation is consistent per finalized loom across every
+    # rounding path (both _apply_rounding_to_final_results and the final
+    # _resolve_detected_meters use this same global tracker).
     round_tracker = {}
-    local_round_tracker = {}
 
     # ===== CONFIG =====
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
@@ -954,7 +957,7 @@ def extract_loom_data_from_video(video_path: str, progress_callback=None) -> lis
                     day_label,
                     shift_label,
                     loom_label=loom_key,
-                    tracker=local_round_tracker,
+                    tracker=None,
                 )
 
     prompt = """
@@ -1258,33 +1261,38 @@ Only JSON.
 
 
 def _resolve_detected_meters(extracted_data: dict, selected_shift: str) -> int | None:
-    """Normalizes meters output when extractor returns shift-wise values."""
+    """Normalizes meters output when extractor returns shift-wise values.
+
+    Uses the alternating .5 rule (a value ending in .5 rounds DOWN the first time,
+    UP the next time, and so on per shift) instead of Python's built-in round(),
+    which uses banker's rounding (round-half-to-even) and would otherwise break the
+    rule on the fallback paths below. Already-integer values pass through unchanged.
+    """
     raw_meters = extracted_data.get("meters")
 
     shift_key = (selected_shift or "").strip().lower()
 
+    def _round(v):
+        # Validate it is numeric first so non-numeric values still return None.
+        try:
+            float(v)
+        except (TypeError, ValueError):
+            return None
+        return custom_shift_round(v, "", selected_shift)
+
     if shift_key in {"morning", "day"}:
         for k, v in extracted_data.items():
             if str(k).strip().lower().endswith("_day"):
-                try:
-                    return int(round(float(v)))
-                except Exception:
-                    return None
+                return _round(v)
 
     # Fallback to generic meters only if no shift-specific value is found.
     if isinstance(raw_meters, (int, float, str)):
-        try:
-            return int(round(float(raw_meters)))
-        except Exception:
-            return None
+        return _round(raw_meters)
 
     if shift_key in {"night", "ngt"}:
         for k, v in extracted_data.items():
             if str(k).strip().lower().endswith("_ngt"):
-                try:
-                    return int(round(float(v)))
-                except Exception:
-                    return None
+                return _round(v)
 
     candidate_maps = []
     if isinstance(raw_meters, dict):
@@ -1298,10 +1306,7 @@ def _resolve_detected_meters(extracted_data: dict, selected_shift: str) -> int |
     for mapping in candidate_maps:
         for k, v in mapping.items():
             if str(k).strip().lower() == shift_key:
-                try:
-                    return int(round(float(v)))
-                except Exception:
-                    return None
+                return _round(v)
 
     return None
 
