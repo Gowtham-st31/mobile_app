@@ -1235,16 +1235,18 @@ Only JSON.
         finalized = _finalize_group_rows(current_group_rows)
         _commit_finalized_row(finalized)
 
-    # Round only once after final loom dedupe selection is complete.
-    _apply_rounding_to_final_results(results)
-
     def _loom_sort_key(row: dict):
         loom_text = str((row or {}).get("loom") or "").strip()
         if loom_text.isdigit():
             return (0, int(loom_text), loom_text)
         return (1, loom_text)
 
+    # Sort by loom number FIRST, then apply the .5 alternation in that order so
+    # the first loom (in displayed order) with a .5 tie rounds down, the next
+    # rounds up, and so on. Rounding runs once on the final deduped loom rows,
+    # so the same loom across multiple frames never flip-flops.
     results = sorted(results, key=_loom_sort_key)
+    _apply_rounding_to_final_results(results)
 
     cap.release()
 
