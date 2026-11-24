@@ -1096,7 +1096,7 @@ Only JSON.
                 _detect_log(f"Sending to model... (try {retry_count + 1})")
 
                 response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
+                    model="gemini-3.5-flash-lite",
                     contents=[
                         prompt,
                         genai.types.Part.from_bytes(
@@ -1149,7 +1149,7 @@ Only JSON.
 """
 
                     fallback_response = client.models.generate_content(
-                        model="gemini-3.1-flash-lite",
+                        model="gemini-3.5-flash-lite",
                         contents=[
                             fallback_prompt,
                             genai.types.Part.from_bytes(
